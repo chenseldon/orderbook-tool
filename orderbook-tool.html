@@ -357,11 +357,6 @@
                   <input id="pyCryptoSecret" type="password" placeholder="公开深度无需填写" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" />
                 </div>
               </div>
-              <div>
-                <label class="text-slate-500 text-xs">代理地址（国内访问Binance必填）</label>
-                <input id="pyCryptoProxy" placeholder="例: http://127.0.0.1:7890" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
-                <div class="text-slate-600 text-xs mt-0.5">Binance受地区限制，需填写本地代理。OKX/Bybit/Gate等可留空。</div>
-              </div>
             </div>
             <!-- A股 -->
             <div id="pyAShareForm" class="hidden space-y-1.5">
@@ -1747,6 +1742,32 @@ const RealtimeAPI = {
     }
   },
 
+  /**
+   * 从TBT分组数据生成完整时序快照数组（用于时序CSV导出）
+   * 每个时间戳key生成一帧，返回 [{ts, bids, asks}, ...]
+   * @param {Map}    groups  buildReplayGroups.groups
+   * @param {Array}  keys    排序后的时间戳key数组
+   * @param {object} idxMap  字段索引映射
+   * @param {Function} onProgress  进度回调(0-1)
+   */
+  async buildTimeSeries(groups, keys, idxMap, onProgress) {
+    const st = { orderMap: {}, bids: {}, asks: {} };
+    const history = [];
+    const total = keys.length;
+    const BATCH = 500;  // 每批处理后yield
+    for (let i = 0; i < total; i++) {
+      this._applyRowsToState(groups.get(keys[i]), idxMap, st);
+      const snap = this._buildSnapshot(st);
+      history.push({ ts: TBTParser.formatClock(keys[i]), bids: snap.bids, asks: snap.asks });
+      if (i % BATCH === 0) {
+        if (onProgress) onProgress(i / total);
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+    if (onProgress) onProgress(1);
+    return history;
+  },
+
   disconnect() {
     if (this._ws)          { try { this._ws.close(); } catch(_) {} this._ws = null; }
     if (this._pythonWs)    { try { this._pythonWs.close(); } catch(_) {} this._pythonWs = null; }
@@ -2141,6 +2162,26 @@ const App = {
         const s = result.stats;
         showToast(`✅ 重构完成 | 新增${s.totalOrders} 撤${s.totalCancels} 成交${s.totalTrans} | ${result.bids.length}买档 ${result.asks.length}卖档`, 'success');
         setFooterStatus(`TBT重构 | ${result.symbol} | ${result.lastTs.split(' ')[1] || result.lastTs}`);
+
+        // 在后台生成完整时序快照（不阻塞UI，用进度条复用）
+        setFooterStatus('正在生成时序数据…');
+        progress.classList.remove('hidden');
+        const g = await TBTParser.buildReplayGroups(
+          this.state.tbtLines,
+          frac => { bar.style.width = `${(frac * 50 + 50).toFixed(0)}%`; pct.textContent = `${(frac * 50 + 50).toFixed(0)}%`; }
+        );
+        // 缓存分组供回放使用
+        this.state.tbtGroups = g.groups;
+        this.state.tbtKeys   = g.keys;
+        this.state.tbtIdxMap = g.idxMap;
+
+        this.state.snapshotHistory = await RealtimeAPI.buildTimeSeries(
+          g.groups, g.keys, g.idxMap,
+          frac => { bar.style.width = `${(frac * 50 + 50).toFixed(0)}%`; pct.textContent = `${(frac * 50 + 50).toFixed(0)}%`; }
+        );
+        document.getElementById('btnExportTimeSeries').disabled = false;
+        setFooterStatus(`TBT重构 | ${result.symbol} | 时序${this.state.snapshotHistory.length}帧已就绪`);
+        showToast(`📊 时序数据已生成：${this.state.snapshotHistory.length} 帧，可直接导出`, 'success');
       } catch(err) {
         showToast(`❌ TBT重构失败：${err.message}`, 'error');
       } finally {
@@ -2547,7 +2588,7 @@ const App = {
       params.symbol = document.getElementById('pyCryptoSymbol').value.trim() || 'BTC/USDT';
       params.apiKey  = document.getElementById('pyCryptoKey').value.trim();
       params.secret  = document.getElementById('pyCryptoSecret').value.trim();
-      params.proxy   = document.getElementById('pyCryptoProxy').value.trim();
+      params.proxy   = '';  // 不使用代理（海外IP可直连）
       if (mode === 'aggregate') {
         const checked = [...document.querySelectorAll('.py-agg-ex:checked')].map(el => el.value);
         if (checked.length === 0) { showToast('请至少选择一个聚合交易所', 'error'); return null; }
