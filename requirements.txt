@@ -1,0 +1,25 @@
+# 多市场订单簿重构工具 — Python依赖
+
+# ── 服务器核心 ────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+
+# ── 加密货币（必装，公开行情无需API Key）──
+ccxt[pro]>=4.3.0        # 支持150+交易所，含WebSocket Pro版
+
+# ── A股（需安装迅投QMT客户端后才能用）────
+# xtquant                # 安装QMT客户端后在QMT目录下的site-packages找到
+
+# ── 美股 Alpaca ─────────────────────────
+# alpaca-py>=0.22.0      # pip install alpaca-py
+
+# ── 美股 Interactive Brokers ────────────
+# ib_insync>=0.9.86      # pip install ib_insync
+
+# ── 港股 富途 OpenAPI ────────────────────
+# futu-api>=9.0.0        # pip install futu-api（需本地运行FutuOpenD）
+
+# ── 期货 CTP ─────────────────────────────
+# openctp-ctp            # pip install openctp-ctp（仿真可测试）
+# vnpy-ctp               # 或 pip install vnpy-ctp（需券商授权）

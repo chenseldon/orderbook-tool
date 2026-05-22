@@ -246,6 +246,7 @@
               <option value="ws">WebSocket（推送）</option>
               <option value="poll">HTTP 轮询</option>
               <option value="replay">TBT文件回放</option>
+              <option value="python">🐍 本地Python服务（ws://localhost:8765）</option>
             </select>
           </div>
           <!-- 地址（WS / HTTP） -->
@@ -297,6 +298,142 @@
           </div>
           <!-- 格式提示 -->
           <div id="apiFormatHint" class="hidden text-slate-500 bg-slate-900 rounded p-2 font-mono overflow-x-auto whitespace-pre text-xs leading-relaxed"></div>
+
+          <!-- ── Python本地服务面板 ──────────────────────────── -->
+          <div id="pythonPanel" class="hidden space-y-2">
+            <!-- 服务状态 -->
+            <div class="flex items-center gap-2 bg-slate-900 rounded p-2">
+              <span id="pyDot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+              <span id="pyStatusText" class="text-slate-500 text-xs">服务未检测</span>
+              <button id="btnPyCheck" class="ml-auto text-xs text-blue-400 hover:text-blue-300 underline">检测服务</button>
+            </div>
+            <!-- 加密货币 -->
+            <div id="pyCryptoForm" class="hidden space-y-1.5">
+              <div class="text-slate-400 text-xs font-medium border-b border-slate-700 pb-1">加密货币配置</div>
+              <div>
+                <label class="text-slate-500 text-xs">模式</label>
+                <select id="pyCryptoMode" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs">
+                  <option value="single">单交易所</option>
+                  <option value="aggregate">多交易所聚合</option>
+                </select>
+              </div>
+              <div id="pySingleExGroup">
+                <label class="text-slate-500 text-xs">交易所</label>
+                <select id="pySingleEx" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs">
+                  <option value="binance">Binance</option>
+                  <option value="okx">OKX</option>
+                  <option value="bybit">Bybit</option>
+                  <option value="coinbase">Coinbase</option>
+                  <option value="kraken">Kraken</option>
+                  <option value="gate">Gate.io</option>
+                  <option value="kucoin">KuCoin</option>
+                  <option value="mexc">MEXC</option>
+                  <option value="htx">HTX（火币）</option>
+                  <option value="bitget">Bitget</option>
+                </select>
+              </div>
+              <div id="pyAggExGroup" class="hidden">
+                <label class="text-slate-500 text-xs">聚合交易所（多选）</label>
+                <div class="mt-1 grid grid-cols-2 gap-1">
+                  <label class="flex items-center gap-1 text-xs text-slate-400"><input type="checkbox" class="py-agg-ex" value="binance" checked> Binance</label>
+                  <label class="flex items-center gap-1 text-xs text-slate-400"><input type="checkbox" class="py-agg-ex" value="okx" checked> OKX</label>
+                  <label class="flex items-center gap-1 text-xs text-slate-400"><input type="checkbox" class="py-agg-ex" value="bybit" checked> Bybit</label>
+                  <label class="flex items-center gap-1 text-xs text-slate-400"><input type="checkbox" class="py-agg-ex" value="gate"> Gate.io</label>
+                  <label class="flex items-center gap-1 text-xs text-slate-400"><input type="checkbox" class="py-agg-ex" value="kucoin"> KuCoin</label>
+                  <label class="flex items-center gap-1 text-xs text-slate-400"><input type="checkbox" class="py-agg-ex" value="kraken"> Kraken</label>
+                </div>
+              </div>
+              <div>
+                <label class="text-slate-500 text-xs">交易对</label>
+                <input id="pyCryptoSymbol" value="BTC/USDT" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+              </div>
+              <div class="grid grid-cols-2 gap-1">
+                <div>
+                  <label class="text-slate-500 text-xs">API Key（可选）</label>
+                  <input id="pyCryptoKey" type="password" placeholder="公开深度无需填写" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" />
+                </div>
+                <div>
+                  <label class="text-slate-500 text-xs">Secret（可选）</label>
+                  <input id="pyCryptoSecret" type="password" placeholder="公开深度无需填写" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" />
+                </div>
+              </div>
+            </div>
+            <!-- A股 -->
+            <div id="pyAShareForm" class="hidden space-y-1.5">
+              <div class="text-slate-400 text-xs font-medium border-b border-slate-700 pb-1">A股配置（需QMT客户端）</div>
+              <div>
+                <label class="text-slate-500 text-xs">股票代码</label>
+                <input id="pyAShareSymbol" value="000001.SZ" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+              </div>
+              <div class="grid grid-cols-2 gap-1">
+                <div><label class="text-slate-500 text-xs">账号</label><input id="pyAShareUser" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" /></div>
+                <div><label class="text-slate-500 text-xs">密码</label><input id="pyASharePass" type="password" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" /></div>
+              </div>
+            </div>
+            <!-- 美股 -->
+            <div id="pyUSForm" class="hidden space-y-1.5">
+              <div class="text-slate-400 text-xs font-medium border-b border-slate-700 pb-1">美股配置</div>
+              <div>
+                <label class="text-slate-500 text-xs">接入方式</label>
+                <select id="pyUSProvider" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs">
+                  <option value="alpaca">Alpaca（API Key）</option>
+                  <option value="ibkr">Interactive Brokers（本地TWS）</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-slate-500 text-xs">股票代码</label>
+                <input id="pyUSSymbol" value="AAPL" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+              </div>
+              <div id="pyAlpacaGroup" class="grid grid-cols-2 gap-1">
+                <div><label class="text-slate-500 text-xs">API Key</label><input id="pyAlpacaKey" type="password" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" /></div>
+                <div><label class="text-slate-500 text-xs">Secret</label><input id="pyAlpacaSecret" type="password" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" /></div>
+              </div>
+              <div id="pyIBKRGroup" class="hidden grid grid-cols-2 gap-1">
+                <div><label class="text-slate-500 text-xs">TWS地址</label><input id="pyIBKRHost" value="127.0.0.1" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" /></div>
+                <div><label class="text-slate-500 text-xs">端口</label><input id="pyIBKRPort" value="7497" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" /></div>
+              </div>
+            </div>
+            <!-- 港股 -->
+            <div id="pyHKForm" class="hidden space-y-1.5">
+              <div class="text-slate-400 text-xs font-medium border-b border-slate-700 pb-1">港股配置（需富途 FutuOpenD）</div>
+              <div class="grid grid-cols-2 gap-1">
+                <div><label class="text-slate-500 text-xs">OpenD地址</label><input id="pyHKHost" value="127.0.0.1" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" /></div>
+                <div><label class="text-slate-500 text-xs">端口</label><input id="pyHKPort" value="11111" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" /></div>
+              </div>
+              <div>
+                <label class="text-slate-500 text-xs">股票代码</label>
+                <input id="pyHKSymbol" value="HK.00700" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+              </div>
+            </div>
+            <!-- 期货 -->
+            <div id="pyFuturesForm" class="hidden space-y-1.5">
+              <div class="text-slate-400 text-xs font-medium border-b border-slate-700 pb-1">期货CTP配置</div>
+              <div>
+                <label class="text-slate-500 text-xs">行情前置地址</label>
+                <input id="pyCtpMd" value="tcp://180.168.146.187:10211" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+              </div>
+              <div class="grid grid-cols-3 gap-1">
+                <div><label class="text-slate-500 text-xs">BrokerID</label><input id="pyCtpBroker" value="9999" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" /></div>
+                <div><label class="text-slate-500 text-xs">账号</label><input id="pyCtpUser" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" /></div>
+                <div><label class="text-slate-500 text-xs">密码</label><input id="pyCtpPass" type="password" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" /></div>
+              </div>
+              <div>
+                <label class="text-slate-500 text-xs">合约代码</label>
+                <input id="pyCtpSymbol" value="IF2412" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+              </div>
+            </div>
+            <!-- 档位数 -->
+            <div class="flex items-center gap-2">
+              <label class="text-slate-500 text-xs">接收档位</label>
+              <input id="pyLevels" type="number" value="20" min="1" max="50"
+                class="w-16 bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs text-center" />
+            </div>
+            <!-- 记住凭据 -->
+            <label class="flex items-center gap-2 text-xs text-slate-500 cursor-pointer">
+              <input id="pyRemember" type="checkbox" class="rounded"> 记住凭据（保存到本地，不上传）
+            </label>
+          </div>
+          <!-- ── Python面板结束 ─────────────────────────────── -->
         </div>
       </details>
     </div>
@@ -1297,6 +1434,7 @@ const ManualEditManager = {
    =================================================================== */
 const RealtimeAPI = {
   _ws:         null,
+  _pythonWs:   null,   // Python本地服务WebSocket
   _pollTimer:  null,
   _replayTimer: null,
   _replayPaused: false,
@@ -1360,8 +1498,63 @@ const RealtimeAPI = {
   },
 
   /**
-   * 共享行处理器（startReplay / seekReplay 共用）
+   * 连接本地Python服务（ws://localhost:8765）
+   * 发送connect/aggregate指令，接收snapshot推送
    */
+  connectPython(market, params, onData, onStatus) {
+    this.disconnect();
+    this._msgCount = 0;
+    onStatus('connecting');
+    try {
+      const ws = new WebSocket('ws://localhost:8765');
+      this._pythonWs = ws;
+      ws.onopen = () => {
+        // 发送连接指令
+        const cmd = params.mode === 'aggregate'
+          ? { cmd: 'aggregate', market, params }
+          : { cmd: 'connect',   market, params };
+        ws.send(JSON.stringify(cmd));
+      };
+      ws.onclose = () => {
+        this._pythonWs = null;
+        onStatus('disconnected');
+      };
+      ws.onerror = () => onStatus('error');
+      ws.onmessage = e => {
+        try {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'snapshot') {
+            // 将Python推送的标准快照转换为前端process()接受的格式
+            const parsed = {
+              bids: (msg.bids || []).map(([p, q]) => ({ price: +p, qty: +q })),
+              asks: (msg.asks || []).map(([p, q]) => ({ price: +p, qty: +q })),
+            };
+            this._msgCount++;
+            onData(parsed, this._msgCount);
+            onStatus('connected', this._msgCount);
+          } else if (msg.type === 'status') {
+            if (msg.state === 'connected' || msg.state === 'ready') onStatus('connected');
+            else if (msg.state === 'connecting') onStatus('connecting');
+            else if (msg.state === 'disconnected') onStatus('disconnected');
+            if (msg.msg) showToast('🐍 ' + msg.msg, 'info');
+          } else if (msg.type === 'error') {
+            onStatus('error');
+            showToast('❌ ' + (msg.msg || '服务错误'), 'error');
+          }
+        } catch(_) {}
+      };
+    } catch(err) { onStatus('error'); }
+  },
+
+  /** 检测Python服务是否在线（HTTP状态接口） */
+  async checkPythonService() {
+    try {
+      const res = await fetch('http://localhost:8766/status', { signal: AbortSignal.timeout(2000) });
+      return res.ok ? await res.json() : null;
+    } catch(_) { return null; }
+  },
+
+
   _applyRowsToState(rows, I, st) {
     rows.forEach(cols => {
       const rowType = (cols[I.type] || '').trim();
@@ -1506,6 +1699,7 @@ const RealtimeAPI = {
 
   disconnect() {
     if (this._ws)          { try { this._ws.close(); } catch(_) {} this._ws = null; }
+    if (this._pythonWs)    { try { this._pythonWs.close(); } catch(_) {} this._pythonWs = null; }
     if (this._pollTimer)   { clearInterval(this._pollTimer); this._pollTimer = null; }
     if (this._replayTimer) { clearTimeout(this._replayTimer); this._replayTimer = null; }
     this._replayPaused = false;
@@ -2096,13 +2290,16 @@ const App = {
     // 模式切换：显示/隐藏相关控件
     modeEl.addEventListener('change', () => {
       const mode = modeEl.value;
-      urlGroup.classList.toggle('hidden', mode === 'replay');
+      const isPython = mode === 'python';
+      urlGroup.classList.toggle('hidden', mode === 'replay' || isPython);
       intGroup.classList.toggle('hidden', mode !== 'poll');
-      fmtGroup.classList.toggle('hidden', mode === 'replay');
-      document.getElementById('apiPresetsGroup').classList.toggle('hidden', mode === 'replay');
+      fmtGroup.classList.toggle('hidden', mode === 'replay' || isPython);
+      document.getElementById('apiPresetsGroup').classList.toggle('hidden', mode === 'replay' || isPython);
+      document.getElementById('pythonPanel').classList.toggle('hidden', !isPython);
       if (mode === 'ws')     urlInput.value = 'ws://localhost:8080/orderbook';
       if (mode === 'poll')   urlInput.value = 'http://localhost:8080/orderbook';
       if (mode === 'replay') showToast('回放模式：请先在TBT面板加载文件并点击"▶ 回放"', 'info');
+      if (isPython)          this._refreshPythonPanel();
     });
 
     // 市场切换时同步刷新预设（由App._bindMarketTabs 调用）
@@ -2171,6 +2368,15 @@ const App = {
         setStatus('replay', 0);
         return;
       }
+
+      // ── Python本地服务模式 ──
+      if (mode === 'python') {
+        const params = this._getPythonParams();
+        if (!params) return;  // 验证失败，错误已toast
+        RealtimeAPI.connectPython(this.state.market, params, onData, setStatus);
+        return;
+      }
+
       if (!url) { showToast('请输入接口地址', 'error'); return; }
 
       // 获取选中预设的订阅报文（OKX等需要）
@@ -2186,6 +2392,39 @@ const App = {
       }
     });
 
+    // Python面板内：检测服务按钮
+    document.getElementById('btnPyCheck').addEventListener('click', async () => {
+      const dot  = document.getElementById('pyDot');
+      const text = document.getElementById('pyStatusText');
+      dot.className = 'w-2 h-2 rounded-full bg-yellow-400';
+      text.textContent = '检测中…';
+      const info = await RealtimeAPI.checkPythonService();
+      if (info) {
+        dot.className = 'w-2 h-2 rounded-full bg-green-400';
+        text.textContent = `服务在线 | 支持: ${(info.markets||[]).join(', ')}`;
+      } else {
+        dot.className = 'w-2 h-2 rounded-full bg-red-400';
+        text.textContent = '服务未运行（请双击 start.bat 启动）';
+      }
+    });
+
+    // 美股接入方式切换
+    document.getElementById('pyUSProvider').addEventListener('change', e => {
+      const isIBKR = e.target.value === 'ibkr';
+      document.getElementById('pyAlpacaGroup').classList.toggle('hidden', isIBKR);
+      document.getElementById('pyIBKRGroup').classList.toggle('hidden', !isIBKR);
+    });
+
+    // 加密货币模式切换
+    document.getElementById('pyCryptoMode').addEventListener('change', e => {
+      const isAgg = e.target.value === 'aggregate';
+      document.getElementById('pySingleExGroup').classList.toggle('hidden', isAgg);
+      document.getElementById('pyAggExGroup').classList.toggle('hidden', !isAgg);
+    });
+
+    // 记住凭据：读取localStorage
+    this._loadPythonCredentials();
+
     // 断开按钮
     document.getElementById('btnApiDisconnect').addEventListener('click', () => {
       RealtimeAPI.disconnect();
@@ -2194,7 +2433,108 @@ const App = {
     });
   },
 
-  _updateMarketInfo() {
+  /** 刷新Python面板：按当前市场Tab显示对应的凭据表单 */
+  _refreshPythonPanel() {
+    const market = this.state.market;
+    const forms = { crypto: 'pyCryptoForm', ashare: 'pyAShareForm', us: 'pyUSForm', hk: 'pyHKForm', futures: 'pyFuturesForm' };
+    Object.entries(forms).forEach(([m, id]) => {
+      document.getElementById(id).classList.toggle('hidden', m !== market);
+    });
+  },
+
+  /** 从Python面板读取参数，返回params对象；验证失败返回null */
+  _getPythonParams() {
+    const market = this.state.market;
+    const levels = parseInt(document.getElementById('pyLevels').value) || 20;
+    let params = { levels };
+
+    if (market === 'crypto') {
+      const mode = document.getElementById('pyCryptoMode').value;
+      params.mode = mode;
+      params.symbol = document.getElementById('pyCryptoSymbol').value.trim() || 'BTC/USDT';
+      params.apiKey  = document.getElementById('pyCryptoKey').value.trim();
+      params.secret  = document.getElementById('pyCryptoSecret').value.trim();
+      if (mode === 'aggregate') {
+        const checked = [...document.querySelectorAll('.py-agg-ex:checked')].map(el => el.value);
+        if (checked.length === 0) { showToast('请至少选择一个聚合交易所', 'error'); return null; }
+        params.exchanges = checked;
+      } else {
+        params.exchange = document.getElementById('pySingleEx').value;
+      }
+    } else if (market === 'ashare') {
+      params.symbol   = document.getElementById('pyAShareSymbol').value.trim() || '000001.SZ';
+      params.userId   = document.getElementById('pyAShareUser').value.trim();
+      params.password = document.getElementById('pyASharePass').value;
+    } else if (market === 'us') {
+      params.provider = document.getElementById('pyUSProvider').value;
+      params.symbol   = document.getElementById('pyUSSymbol').value.trim().toUpperCase() || 'AAPL';
+      if (params.provider === 'alpaca') {
+        params.apiKey = document.getElementById('pyAlpacaKey').value.trim();
+        params.secret = document.getElementById('pyAlpacaSecret').value.trim();
+        if (!params.apiKey || !params.secret) { showToast('Alpaca需填写API Key和Secret', 'error'); return null; }
+      } else {
+        params.host     = document.getElementById('pyIBKRHost').value.trim() || '127.0.0.1';
+        params.port     = parseInt(document.getElementById('pyIBKRPort').value) || 7497;
+      }
+    } else if (market === 'hk') {
+      params.host   = document.getElementById('pyHKHost').value.trim() || '127.0.0.1';
+      params.port   = parseInt(document.getElementById('pyHKPort').value) || 11111;
+      params.symbol = document.getElementById('pyHKSymbol').value.trim() || 'HK.00700';
+    } else if (market === 'futures') {
+      params.mdServer = document.getElementById('pyCtpMd').value.trim();
+      params.brokerId = document.getElementById('pyCtpBroker').value.trim();
+      params.userId   = document.getElementById('pyCtpUser').value.trim();
+      params.password = document.getElementById('pyCtpPass').value;
+      params.symbol   = document.getElementById('pyCtpSymbol').value.trim() || 'IF2412';
+      if (!params.userId || !params.password) { showToast('期货CTP需填写账号和密码', 'error'); return null; }
+    }
+
+    // 记住凭据
+    if (document.getElementById('pyRemember').checked) {
+      this._savePythonCredentials(market, params);
+    }
+    return params;
+  },
+
+  /** 保存凭据到localStorage（不保存密码） */
+  _savePythonCredentials(market, params) {
+    const safe = { ...params };
+    delete safe.password; delete safe.secret;
+    try { localStorage.setItem(`py_creds_${market}`, JSON.stringify(safe)); } catch(_) {}
+  },
+
+  /** 读取localStorage中的凭据并填入表单 */
+  _loadPythonCredentials() {
+    const market = this.state.market;
+    try {
+      const saved = JSON.parse(localStorage.getItem(`py_creds_${market}`) || 'null');
+      if (!saved) return;
+      if (market === 'crypto') {
+        if (saved.symbol) document.getElementById('pyCryptoSymbol').value = saved.symbol;
+        if (saved.exchange) document.getElementById('pySingleEx').value = saved.exchange;
+        if (saved.mode) document.getElementById('pyCryptoMode').value = saved.mode;
+        if (saved.apiKey)  document.getElementById('pyCryptoKey').value  = saved.apiKey;
+      } else if (market === 'ashare') {
+        if (saved.symbol) document.getElementById('pyAShareSymbol').value = saved.symbol;
+        if (saved.userId) document.getElementById('pyAShareUser').value   = saved.userId;
+      } else if (market === 'us') {
+        if (saved.symbol)   document.getElementById('pyUSSymbol').value   = saved.symbol;
+        if (saved.provider) document.getElementById('pyUSProvider').value = saved.provider;
+        if (saved.apiKey)   document.getElementById('pyAlpacaKey').value  = saved.apiKey;
+      } else if (market === 'hk') {
+        if (saved.host)   document.getElementById('pyHKHost').value   = saved.host;
+        if (saved.port)   document.getElementById('pyHKPort').value   = saved.port;
+        if (saved.symbol) document.getElementById('pyHKSymbol').value = saved.symbol;
+      } else if (market === 'futures') {
+        if (saved.mdServer) document.getElementById('pyCtpMd').value     = saved.mdServer;
+        if (saved.brokerId) document.getElementById('pyCtpBroker').value = saved.brokerId;
+        if (saved.userId)   document.getElementById('pyCtpUser').value   = saved.userId;
+        if (saved.symbol)   document.getElementById('pyCtpSymbol').value = saved.symbol;
+      }
+      document.getElementById('pyRemember').checked = true;
+    } catch(_) {}
+  },
+
     const cfg = MarketConfig[this.state.market];
     const sessHtml = TradingSessions.getScheduleHtml(this.state.market);
     document.getElementById('marketInfoPanel').innerHTML = `
@@ -2207,8 +2547,12 @@ const App = {
       ${sessHtml ? `<div class="border-t border-slate-700 mt-1 pt-1 space-y-0.5 text-xs">${sessHtml}</div>` : ''}
     `;
     document.getElementById('formatExample').textContent = cfg.formatExample;
-    // 刷新实时API预设
+    // 刷新实时API预设 + Python面板
     if (this._refreshAPIPresets) this._refreshAPIPresets();
+    if (document.getElementById('apiMode').value === 'python') {
+      this._refreshPythonPanel();
+      this._loadPythonCredentials();
+    }
   }
 };
 
