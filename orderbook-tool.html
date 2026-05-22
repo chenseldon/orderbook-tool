@@ -577,35 +577,55 @@ const TradingSessions = {
    1c. MarketAPIPresets — 各市场实时接口预设
    =================================================================== */
 const MarketAPIPresets = {
+  // ---- 加密货币：可浏览器直连（国内需代理） ----
   crypto: [
-    { label: 'Binance 现货 BTC/USDT (20档)',   url: 'wss://stream.binance.com:9443/ws/btcusdt@depth20@100ms', format: 'binance' },
-    { label: 'Binance 现货 ETH/USDT (20档)',   url: 'wss://stream.binance.com:9443/ws/ethusdt@depth20@100ms', format: 'binance' },
-    { label: 'Binance U本位合约 BTC',          url: 'wss://fstream.binance.com/ws/btcusdt@depth20@100ms',    format: 'binance' },
+    { label: 'Binance 现货 BTC/USDT (20档)',   url: 'wss://stream.binance.com:443/ws/btcusdt@depth20@100ms',  format: 'binance',
+      note: '端口443。国内需代理/VPN，境外服务器可直连。' },
+    { label: 'Binance 现货 ETH/USDT (20档)',   url: 'wss://stream.binance.com:443/ws/ethusdt@depth20@100ms',  format: 'binance',
+      note: '端口443。国内需代理/VPN，境外服务器可直连。' },
+    { label: 'Binance 现货 BNB/USDT (20档)',   url: 'wss://stream.binance.com:443/ws/bnbusdt@depth20@100ms',  format: 'binance',
+      note: '端口443。国内需代理/VPN。' },
+    { label: 'Binance U本位合约 BTC (20档)',    url: 'wss://fstream.binance.com/ws/btcusdt@depth20@100ms',     format: 'binance',
+      note: '合约行情，国内需代理/VPN。' },
     { label: 'OKX 现货 BTC-USDT (5档)',        url: 'wss://ws.okx.com:8443/ws/v5/public', format: 'okx',
       subscribe: '{"op":"subscribe","args":[{"channel":"books5","instId":"BTC-USDT"}]}',
-      note: '连接后自动发送订阅消息' },
+      note: '5档快速推送。连接后自动发送订阅报文。国内需代理。' },
     { label: 'OKX 现货 ETH-USDT (5档)',        url: 'wss://ws.okx.com:8443/ws/v5/public', format: 'okx',
       subscribe: '{"op":"subscribe","args":[{"channel":"books5","instId":"ETH-USDT"}]}',
-      note: '连接后自动发送订阅消息' },
+      note: '5档快速推送。连接后自动发送订阅报文。国内需代理。' },
+    { label: 'OKX 现货 BTC-USDT (400档)',      url: 'wss://ws.okx.com:8443/ws/v5/public', format: 'okx',
+      subscribe: '{"op":"subscribe","args":[{"channel":"books","instId":"BTC-USDT"}]}',
+      note: '400档全深度增量，国内需代理。' },
   ],
+  // ---- A股：需本地转发服务（浏览器无法直连L2源） ----
   ashare: [
-    { label: '本地Level2推送 (CTP/QMT通道)', url: 'ws://localhost:8080/orderbook', format: 'tbt_event',
-      note: '需要自建本地转发服务，监听券商L2行情并推送TBT事件格式' },
-    { label: 'HTTP轮询接口示例',               url: 'http://localhost:8080/orderbook', format: 'standard',
-      note: '配合HTTP轮询模式使用' },
+    { label: '本地 QMT/XTP 转发 (推荐)',       url: 'ws://localhost:8080/orderbook', format: 'tbt_event',
+      note: '需本地运行Python转发服务。推荐方案：券商开通Level2权限 → 通过QMT/XTP/xtquant获取逐笔数据 → 本地ws转发到此工具。' },
+    { label: '本地 Level2 快照',                url: 'ws://localhost:8080/snapshot',  format: 'standard',
+      note: '接收标准JSON快照格式，适合vnpy/qmt快照模式。' },
+    { label: 'HTTP轮询 (本地中转)',              url: 'http://localhost:8080/snapshot', format: 'standard',
+      note: '配合HTTP轮询模式使用，适合低频快照场景。' },
   ],
+  // ---- 美股：可用Polygon/Alpaca REST+WS，L2需付费 ----
   us: [
-    { label: 'Alpaca Market Data (需API Key)', url: 'wss://stream.data.alpaca.markets/v2/iex', format: 'standard',
-      note: '需先HTTP鉴权，获取token后填入此WS' },
-    { label: '本地中转服务',                    url: 'ws://localhost:8080/orderbook', format: 'standard' },
+    { label: 'Alpaca WebSocket (需API Key)',    url: 'wss://stream.data.alpaca.markets/v2/iex', format: 'standard',
+      note: '免费账户仅L1；需先在Alpaca官网获取API Key，并用HTTP接口换取WS Token后填入地址栏。' },
+    { label: '本地中转服务 (IBKR/Polygon)',     url: 'ws://localhost:8080/orderbook', format: 'standard',
+      note: '通过Interactive Brokers TWS API 或 Polygon.io 在本地获取数据后ws转发。' },
   ],
+  // ---- 港股：富途/老虎OpenAPI本地转发 ----
   hk: [
-    { label: '本地Level2接口 (ODP/Futu通道)', url: 'ws://localhost:8080/orderbook', format: 'standard',
-      note: '可对接富途、老虎等Level2接口后本地转发' },
+    { label: '本地 Futu OpenAPI 转发',          url: 'ws://localhost:8080/orderbook', format: 'standard',
+      note: '需安装富途牛牛 + futu-api Python SDK，本地ws转发。富途账户可免费获取港股L2数据。' },
+    { label: '本地 Tiger Brokers API 转发',     url: 'ws://localhost:8080/orderbook', format: 'standard',
+      note: '通过老虎证券tigeropen SDK订阅港股行情后本地ws转发。' },
   ],
+  // ---- 期货：CTP/openctp本地转发 ----
   futures: [
-    { label: '本地CTP行情接口',                url: 'ws://localhost:8080/orderbook', format: 'tbt_event',
-      note: 'CTP MdApi行情需本地转发，推荐vnpy/openctp等框架' },
+    { label: '本地 CTP MdApi 转发',             url: 'ws://localhost:8080/orderbook', format: 'tbt_event',
+      note: '开通期货账户后可免费使用CTP行情接口。推荐用vnpy/openctp/pyctp订阅行情，本地ws转发。' },
+    { label: '本地 vnpy/RQData 转发',           url: 'ws://localhost:8080/snapshot',  format: 'standard',
+      note: 'vnpy内置CTP网关可直接获取期货快照行情，接入本工具。' },
   ],
 };
 const MockGenerator = {
