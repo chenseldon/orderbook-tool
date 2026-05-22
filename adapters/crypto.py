@@ -25,16 +25,25 @@ SUPPORTED_EXCHANGES = [
 ]
 
 
-def _make_exchange(name: str, api_key: str = "", secret: str = "") -> ccxtpro.Exchange:
+def _make_exchange(name: str, api_key: str = "", secret: str = "",
+                   proxy: str = "") -> ccxtpro.Exchange:
     """创建ccxt.pro交易所实例"""
     cls = getattr(ccxtpro, name, None)
     if cls is None:
         raise ValueError(f"不支持的交易所: {name}")
-    config = {"enableRateLimit": True}
+    config = {
+        "enableRateLimit": True,
+        # 强制现货，避免 binance 默认连接 fapi.binance.com（受地区限制）
+        "defaultType": "spot",
+    }
     if api_key:
         config["apiKey"] = api_key
     if secret:
         config["secret"] = secret
+    if proxy:
+        # 支持 http/https/socks5 代理，如 "http://127.0.0.1:7890"
+        config["proxies"] = {"http": proxy, "https": proxy}
+        config["aiohttp_proxy"] = proxy
     return cls(config)
 
 
@@ -75,21 +84,22 @@ class CryptoAdapter(BaseAdapter):
         levels = int(params.get("levels", 20))
         api_key = params.get("apiKey", "")
         secret = params.get("secret", "")
+        proxy = params.get("proxy", "")
 
         if mode == "aggregate":
-            await self._run_aggregate(params, symbol, levels)
+            await self._run_aggregate(params, symbol, levels, proxy)
         else:
             await self._run_single(
                 params.get("exchange", "binance"),
-                symbol, levels, api_key, secret
+                symbol, levels, api_key, secret, proxy
             )
 
     # ----------------------------------------------------------------
     # 单交易所模式
     # ----------------------------------------------------------------
     async def _run_single(self, ex_name: str, symbol: str, levels: int,
-                          api_key: str, secret: str):
-        ex = _make_exchange(ex_name, api_key, secret)
+                          api_key: str, secret: str, proxy: str = ""):
+        ex = _make_exchange(ex_name, api_key, secret, proxy)
         logger.info(f"[Crypto/single] 连接 {ex_name} {symbol}")
         try:
             while self._running:
@@ -106,15 +116,20 @@ class CryptoAdapter(BaseAdapter):
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            err_msg = str(e)
+            if "451" in err_msg or "restricted location" in err_msg:
+                err_msg = (f"{ex_name} 地区访问受限(451)，请改用代理或切换至 bybit/okx/gate。"
+                           f"\n原始: {e}")
             logger.error(f"[Crypto/single] 错误: {e}")
-            self._emit({"type": "error", "msg": f"交易所错误: {e}"})
+            self._emit({"type": "error", "msg": f"交易所错误: {err_msg}"})
         finally:
             await ex.close()
 
     # ----------------------------------------------------------------
     # 多交易所聚合模式
     # ----------------------------------------------------------------
-    async def _run_aggregate(self, params: dict, symbol: str, levels: int):
+    async def _run_aggregate(self, params: dict, symbol: str, levels: int,
+                             proxy: str = ""):
         exchanges_names = params.get("exchanges", ["binance", "okx", "bybit"])
         api_key = params.get("apiKey", "")
         secret = params.get("secret", "")
@@ -122,7 +137,7 @@ class CryptoAdapter(BaseAdapter):
         exchanges = {}
         for name in exchanges_names:
             try:
-                exchanges[name] = _make_exchange(name, api_key, secret)
+                exchanges[name] = _make_exchange(name, api_key, secret, proxy)
             except Exception as e:
                 logger.warning(f"跳过 {name}: {e}")
 

@@ -1,9 +1,10 @@
 @echo off
 chcp 65001 >nul
-title 多市场订单簿重构工具 - Python服务
+title 多市场订单簿重构工具
 
 echo ====================================
-echo  多市场订单簿重构工具 Python后端
+echo  多市场订单簿重构工具 v2.0
+echo  Python Web 服务版
 echo ====================================
 echo.
 
@@ -16,27 +17,21 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/3] 检查并安装依赖...
-pip install fastapi "uvicorn[standard]" "websockets>=12.0" "ccxt[pro]" --quiet
+echo [1/2] 检查并安装依赖...
+pip install fastapi "uvicorn[standard]" python-multipart "ccxt[pro]" --quiet
 if errorlevel 1 (
-    echo [错误] 依赖安装失败，请检查网络或手动运行：
-    echo   pip install fastapi uvicorn websockets "ccxt[pro]"
-    pause
-    exit /b 1
+    echo [警告] 部分依赖安装失败，加密货币功能可能不可用
+    echo 可手动运行：pip install fastapi uvicorn python-multipart "ccxt[pro]"
 )
 
-echo [2/3] 依赖安装完成
+echo [2/2] 启动服务...
 echo.
-echo [3/3] 启动服务...
-echo.
-echo  WebSocket: ws://localhost:8765
-echo  HTTP状态:  http://localhost:8766/status
-echo.
-echo  请在浏览器中打开 orderbook-tool.html
-echo  在"实时数据接口"面板选择"本地Python服务"即可使用
+echo  服务地址: http://localhost:8765
+echo  浏览器将自动打开
 echo.
 echo  按 Ctrl+C 停止服务
 echo ====================================
 
 python server.py
 pause
+

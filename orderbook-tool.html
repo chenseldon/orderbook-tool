@@ -246,7 +246,7 @@
               <option value="ws">WebSocket（推送）</option>
               <option value="poll">HTTP 轮询</option>
               <option value="replay">TBT文件回放</option>
-              <option value="python">🐍 本地Python服务（ws://localhost:8765）</option>
+              <option value="python">🐍 本地Python服务（http://localhost:8765）</option>
             </select>
           </div>
           <!-- 地址（WS / HTTP） -->
@@ -356,6 +356,11 @@
                   <label class="text-slate-500 text-xs">Secret（可选）</label>
                   <input id="pyCryptoSecret" type="password" placeholder="公开深度无需填写" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" />
                 </div>
+              </div>
+              <div>
+                <label class="text-slate-500 text-xs">代理地址（国内访问Binance必填）</label>
+                <input id="pyCryptoProxy" placeholder="例: http://127.0.0.1:7890" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+                <div class="text-slate-600 text-xs mt-0.5">Binance受地区限制，需填写本地代理。OKX/Bybit/Gate等可留空。</div>
               </div>
             </div>
             <!-- A股 -->
@@ -490,7 +495,10 @@
           ↓ JSON
         </button>
         <button id="btnExportCSV" disabled class="bg-slate-600 hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded px-2 py-1 text-xs transition-colors">
-          ↓ CSV
+          ↓ CSV快照
+        </button>
+        <button id="btnExportTimeSeries" disabled class="bg-slate-600 hover:bg-purple-600 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded px-2 py-1 text-xs transition-colors" title="导出整个交易时段的时序订单簿数据">
+          ↓ 时序CSV
         </button>
       </div>
     </div>
@@ -1372,6 +1380,48 @@ const Exporter = {
     this._download(rows.join('\n'), `orderbook_${cfg.name}_${symbol}_${ts}.csv`, 'text/csv');
   },
 
+  /**
+   * 导出整个交易时段的时序订单簿数据
+   * 每行 = 一个时刻的完整盘口快照（宽表格式）
+   * 列：timestamp, bid1_p, bid1_q, bid2_p, bid2_q, ..., ask1_p, ask1_q, ...
+   */
+  exportTimeSeries(history, cfg, symbol) {
+    if (!history || !history.length) return;
+    const ts  = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    // 确定档位数（取历史中最大的档位数）
+    let maxLevels = 0;
+    for (const snap of history) {
+      maxLevels = Math.max(maxLevels, snap.bids.length, snap.asks.length);
+    }
+    maxLevels = Math.min(maxLevels, 50);
+
+    // 构建表头
+    const bidCols = Array.from({length: maxLevels}, (_, i) =>
+      `bid${i+1}_p,bid${i+1}_q`).join(',');
+    const askCols = Array.from({length: maxLevels}, (_, i) =>
+      `ask${i+1}_p,ask${i+1}_q`).join(',');
+    const header = `timestamp,${bidCols},${askCols}`;
+
+    // 每行一个快照
+    const rows = [header];
+    for (const snap of history) {
+      const cells = [snap.ts];
+      for (let i = 0; i < maxLevels; i++) {
+        const b = snap.bids[i];
+        cells.push(b ? b.price.toFixed(cfg.priceDecimals) : '');
+        cells.push(b ? b.qty.toFixed(cfg.qtyDecimals)     : '');
+      }
+      for (let i = 0; i < maxLevels; i++) {
+        const a = snap.asks[i];
+        cells.push(a ? a.price.toFixed(cfg.priceDecimals) : '');
+        cells.push(a ? a.qty.toFixed(cfg.qtyDecimals)     : '');
+      }
+      rows.push(cells.join(','));
+    }
+    this._download(rows.join('\n'),
+      `timeseries_${cfg.name}_${symbol}_${ts}.csv`, 'text/csv');
+  },
+
   _download(content, filename, mime) {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([content], { type: mime }));
@@ -1498,7 +1548,7 @@ const RealtimeAPI = {
   },
 
   /**
-   * 连接本地Python服务（ws://localhost:8765）
+   * 连接本地Python服务（ws://localhost:8765/ws）
    * 发送connect/aggregate指令，接收snapshot推送
    */
   connectPython(market, params, onData, onStatus) {
@@ -1506,7 +1556,7 @@ const RealtimeAPI = {
     this._msgCount = 0;
     onStatus('connecting');
     try {
-      const ws = new WebSocket('ws://localhost:8765');
+      const ws = new WebSocket('ws://localhost:8765/ws');
       this._pythonWs = ws;
       ws.onopen = () => {
         // 发送连接指令
@@ -1549,7 +1599,7 @@ const RealtimeAPI = {
   /** 检测Python服务是否在线（HTTP状态接口） */
   async checkPythonService() {
     try {
-      const res = await fetch('http://localhost:8766/status', { signal: AbortSignal.timeout(2000) });
+      const res = await fetch('http://localhost:8765/api/status', { signal: AbortSignal.timeout(2000) });
       return res.ok ? await res.json() : null;
     } catch(_) { return null; }
   },
@@ -1812,6 +1862,7 @@ const App = {
     tbtGroups: null,    // TBT回放分组
     tbtKeys:   null,
     tbtIdxMap: null,
+    snapshotHistory: [],  // 时序快照记录（用于时序CSV导出）
     _renderThrottleTs: 0,  // 实时渲染节流时间戳
   },
 
@@ -1831,13 +1882,23 @@ const App = {
   },
 
   /** 执行完整数据处理流程 */
-  process(rawData) {
+  process(rawData, recordHistory = false) {
     if (!rawData) { showToast('无有效数据', 'error'); return; }
     this.state.rawData = rawData;
     const cfg = MarketConfig[this.state.market];
     const opts = this._getCleanOptions();
     const ob   = DataCleaner.clean(rawData, cfg, opts, this.state.levels);
     this.state.obData = ob;
+
+    // 记录时序快照
+    if (recordHistory) {
+      this.state.snapshotHistory.push({
+        ts:   rawData.lastTs || rawData.ts || new Date().toISOString(),
+        bids: ob.bids,
+        asks: ob.asks
+      });
+      document.getElementById('btnExportTimeSeries').disabled = false;
+    }
 
     OrderBookRenderer.render(ob, cfg);
     ChartRenderer.render(ob, cfg);
@@ -2042,7 +2103,13 @@ const App = {
     document.getElementById('btnExportCSV').addEventListener('click', () => {
       if (!this.state.obData) return;
       Exporter.exportCSV(this.state.obData, MarketConfig[this.state.market], this.state.symbol);
-      showToast('✅ CSV已导出', 'success');
+      showToast('✅ CSV快照已导出', 'success');
+    });
+    document.getElementById('btnExportTimeSeries').addEventListener('click', () => {
+      const hist = this.state.snapshotHistory;
+      if (!hist || !hist.length) { showToast('暂无时序数据，请先执行回放或接收实时数据', 'error'); return; }
+      Exporter.exportTimeSeries(hist, MarketConfig[this.state.market], this.state.symbol);
+      showToast(`✅ 时序CSV已导出（共 ${hist.length} 帧）`, 'success');
     });
   },
 
@@ -2126,16 +2193,30 @@ const App = {
       controls.classList.remove('hidden');
       document.getElementById('btnTbtReplay').textContent = '⏸ 暂停';
 
+      // 重置时序历史，开始新录制
+      this.state.snapshotHistory = [];
+      document.getElementById('btnExportTimeSeries').disabled = true;
+
       const speed = parseFloat(document.getElementById('tbtReplaySpeed').value) || 5;
       // 节流渲染：最多每100ms渲染一次，但确保最新快照总能展示
       let _pendingRaw = null;
       let _throttleTimer = null;
+      // 每帧都记录到历史（不节流，保留完整时序）
+      const _recordFrame = (raw) => {
+        this.state.snapshotHistory.push({
+          ts:   raw.lastTs || raw.ts || new Date().toISOString(),
+          bids: raw.bids || [],
+          asks: raw.asks || []
+        });
+        document.getElementById('btnExportTimeSeries').disabled = false;
+      };
       const _doRender = (raw, count) => {
         document.getElementById('apiMsgCount').textContent = `已接收 ${count} 条`;
         document.getElementById('apiMsgCount').classList.remove('hidden');
         this.process(raw);
       };
       const _onData = (raw, count) => {
+        _recordFrame(raw);  // 每帧记录，不受节流影响
         _pendingRaw = { raw, count };
         const now = Date.now();
         if (now - this.state._renderThrottleTs >= 100) {
@@ -2349,6 +2430,14 @@ const App = {
 
     const onData = (raw, count) => {
       const now = Date.now();
+      // 每帧记录到时序历史（实时数据）
+      this.state.snapshotHistory.push({
+        ts:   raw.ts || new Date().toISOString(),
+        bids: raw.bids || [],
+        asks: raw.asks || []
+      });
+      document.getElementById('btnExportTimeSeries').disabled = false;
+      // 节流渲染：最多100ms一次
       if (now - this.state._renderThrottleTs < 100) return;
       this.state._renderThrottleTs = now;
       document.getElementById('apiMsgCount').textContent = `已接收 ${count} 条`;
@@ -2361,6 +2450,10 @@ const App = {
       const mode   = modeEl.value;
       const url    = document.getElementById('apiUrl').value.trim();
       const format = document.getElementById('apiFormat').value;
+
+      // 重置时序历史（每次新连接/回放清空）
+      this.state.snapshotHistory = [];
+      document.getElementById('btnExportTimeSeries').disabled = true;
 
       if (mode === 'replay') {
         if (!this.state.tbtLines) { showToast('请先在"文件导入"处载入TBT文件', 'error'); return; }
@@ -2454,6 +2547,7 @@ const App = {
       params.symbol = document.getElementById('pyCryptoSymbol').value.trim() || 'BTC/USDT';
       params.apiKey  = document.getElementById('pyCryptoKey').value.trim();
       params.secret  = document.getElementById('pyCryptoSecret').value.trim();
+      params.proxy   = document.getElementById('pyCryptoProxy').value.trim();
       if (mode === 'aggregate') {
         const checked = [...document.querySelectorAll('.py-agg-ex:checked')].map(el => el.value);
         if (checked.length === 0) { showToast('请至少选择一个聚合交易所', 'error'); return null; }
@@ -2535,6 +2629,7 @@ const App = {
     } catch(_) {}
   },
 
+  _updateMarketInfo() {
     const cfg = MarketConfig[this.state.market];
     const sessHtml = TradingSessions.getScheduleHtml(this.state.market);
     document.getElementById('marketInfoPanel').innerHTML = `
