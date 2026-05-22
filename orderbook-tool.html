@@ -1,0 +1,2220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>多市场订单簿重构工具 v1.0</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    /* 自定义滚动条 */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    /* 数量背景条（买盘/卖盘） */
+    .bid-bar { background: linear-gradient(to left, rgba(34,197,94,0.18) var(--pct), transparent var(--pct)); }
+    .ask-bar { background: linear-gradient(to left, rgba(239,68,68,0.18) var(--pct), transparent var(--pct)); }
+    /* Toast动画 */
+    @keyframes fadeInOut { 0%{opacity:0;transform:translateY(-10px)} 10%{opacity:1;transform:translateY(0)} 80%{opacity:1} 100%{opacity:0} }
+    .toast { animation: fadeInOut 3s ease forwards; }
+    /* 输入框焦点色 */
+    input:focus, select:focus, textarea:focus { outline: 2px solid #3b82f6; outline-offset: 1px; }
+    /* 表格固定高度滚动 */
+    .ob-table-wrap { max-height: 380px; overflow-y: auto; }
+    /* 顶部Tab激活 */
+    .tab-active { background: #3b82f6 !important; color: #fff !important; }
+    /* 进度条动画 */
+    @keyframes progress-pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+    .progress-pulse { animation: progress-pulse 1.2s ease-in-out infinite; }
+    /* WebSocket状态点 */
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+    .dot-blink { animation: blink 1s ease-in-out infinite; }
+    /* 拖拽进度条 */
+    #tbtSeekBar { height: 6px; }
+    #tbtSeekBar::-webkit-slider-thumb { width: 14px; height: 14px; }
+    #tbtSeekBar::-moz-range-thumb { width: 14px; height: 14px; border: none; background: #22c55e; border-radius: 50%; }
+    /* 交易时段标签 */
+    .session-badge { padding: 1px 5px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col text-sm">
+
+<!-- ===== 顶部导航栏 ===== -->
+<header class="bg-slate-800 border-b border-slate-700 px-4 py-2 flex items-center gap-4 flex-wrap sticky top-0 z-20">
+  <div class="flex items-center gap-2 mr-2">
+    <span class="text-blue-400 text-lg font-bold">📊</span>
+    <span class="font-bold text-white text-base">订单簿重构工具</span>
+    <span class="text-slate-500 text-xs">v1.0</span>
+  </div>
+  <!-- 市场切换Tab -->
+  <div class="flex gap-1" id="marketTabs">
+    <button class="tab-btn tab-active px-3 py-1 rounded text-xs font-medium bg-slate-700 hover:bg-blue-500 transition-colors" data-market="ashare">A股</button>
+    <button class="tab-btn px-3 py-1 rounded text-xs font-medium bg-slate-700 hover:bg-blue-500 transition-colors" data-market="us">美股</button>
+    <button class="tab-btn px-3 py-1 rounded text-xs font-medium bg-slate-700 hover:bg-blue-500 transition-colors" data-market="hk">港股</button>
+    <button class="tab-btn px-3 py-1 rounded text-xs font-medium bg-slate-700 hover:bg-blue-500 transition-colors" data-market="futures">期货</button>
+    <button class="tab-btn px-3 py-1 rounded text-xs font-medium bg-slate-700 hover:bg-blue-500 transition-colors" data-market="crypto">加密货币</button>
+  </div>
+  <!-- 档位选择 -->
+  <div class="flex items-center gap-2 ml-auto">
+    <label class="text-slate-400 text-xs">档位</label>
+    <input type="range" id="levelsSlider" min="1" max="50" value="10" class="w-24 accent-blue-500" />
+    <input type="number" id="levelsNum" min="1" max="50" value="10" class="w-12 bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-center text-xs" />
+    <span class="text-slate-400 text-xs">档</span>
+  </div>
+  <!-- WebSocket连接状态徽章 -->
+  <div id="wsStatusBadge" class="hidden items-center gap-1.5 px-2 py-1 rounded-full text-xs border border-slate-600 bg-slate-700/80">
+    <span id="wsStatusDot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+    <span id="wsStatusText" class="text-slate-400">未连接</span>
+  </div>
+</header>
+
+<!-- Toast提示区 -->
+<div id="toastContainer" class="fixed top-14 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+<!-- ===== 主体三栏 ===== -->
+<main class="flex flex-1 gap-3 p-3 overflow-auto">
+
+  <!-- ===== 左栏：输入区 ===== -->
+  <section class="w-72 flex-shrink-0 flex flex-col gap-3">
+
+    <!-- 市场信息卡 -->
+    <div class="bg-slate-800 rounded-lg p-3 border border-slate-700">
+      <div class="text-xs text-slate-400 mb-1">当前市场配置</div>
+      <div id="marketInfoPanel" class="text-xs space-y-1 text-slate-300"></div>
+    </div>
+
+    <!-- 模拟数据生成 -->
+    <div class="bg-slate-800 rounded-lg p-3 border border-slate-700">
+      <div class="font-medium text-slate-200 mb-2 flex items-center gap-1">
+        <span>🎲</span> 模拟数据生成
+      </div>
+      <div class="flex gap-2 mb-2">
+        <div class="flex-1">
+          <label class="text-xs text-slate-400">标的代码</label>
+          <input id="symbolInput" type="text" value="000001" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" />
+        </div>
+        <div class="flex-1">
+          <label class="text-xs text-slate-400">基准价格</label>
+          <input id="basePriceInput" type="number" value="10.00" step="0.01" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs" />
+        </div>
+      </div>
+      <button id="btnGenerate" class="w-full bg-blue-600 hover:bg-blue-700 text-white rounded px-3 py-1.5 text-xs font-medium transition-colors">
+        ⚡ 生成模拟订单簿
+      </button>
+    </div>
+
+    <!-- 文件导入 -->
+    <div class="bg-slate-800 rounded-lg p-3 border border-slate-700">
+      <div class="font-medium text-slate-200 mb-2 flex items-center gap-1">
+        <span>📂</span> 导入本地文件
+      </div>
+      <label class="block w-full border-2 border-dashed border-slate-600 hover:border-blue-500 rounded-lg p-3 text-center cursor-pointer transition-colors">
+        <div class="text-slate-400 text-xs">点击选择 JSON / CSV 文件</div>
+        <div class="text-slate-500 text-xs mt-1">或将文件拖入此区域</div>
+        <input id="fileInput" type="file" accept=".json,.csv" class="hidden" />
+      </label>
+      <div id="fileInfo" class="mt-2 text-xs text-slate-500 hidden"></div>
+      <!-- JSON文本粘贴 -->
+      <details class="mt-2">
+        <summary class="text-xs text-slate-400 cursor-pointer hover:text-blue-400">▶ 粘贴JSON文本</summary>
+        <textarea id="jsonPasteArea" rows="4" placeholder='{"bids":[[10.00,1000]],"asks":[[10.01,800]]}'
+          class="w-full mt-1 bg-slate-700 border border-slate-600 rounded p-2 text-xs font-mono resize-none"></textarea>
+        <button id="btnParseJson" class="mt-1 w-full bg-slate-600 hover:bg-slate-500 text-white rounded px-2 py-1 text-xs transition-colors">解析JSON</button>
+      </details>
+    </div>
+
+    <!-- TBT逐笔重构面板（检测到TBT格式时显示） -->
+    <div id="tbtPanel" class="hidden bg-slate-800 rounded-lg p-3 border border-amber-700/60">
+      <div class="font-medium text-amber-400 mb-2 flex items-center gap-1 text-xs">
+        <span>📡</span> TBT逐笔数据重构
+        <span class="ml-auto text-slate-500 font-normal" id="tbtRowCount"></span>
+      </div>
+      <!-- 文件信息 -->
+      <div id="tbtFileInfo" class="text-xs text-slate-400 mb-2 space-y-0.5 bg-slate-900/50 rounded p-2"></div>
+      <!-- 快照时间 -->
+      <div class="space-y-2 text-xs">
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400 shrink-0">快照时间</span>
+          <input id="tbtSnapshotTime" type="text" placeholder="HH:MM:SS（空=全量）"
+            class="flex-1 bg-slate-700 border border-slate-600 rounded px-2 py-0.5 text-xs font-mono" />
+        </div>
+        <div class="flex gap-1">
+          <button id="btnTbtReconstruct" class="flex-1 bg-amber-700 hover:bg-amber-600 text-white rounded px-2 py-1.5 text-xs font-medium transition-colors">
+            ⚙️ 重构订单簿
+          </button>
+          <button id="btnTbtReplay" class="bg-slate-600 hover:bg-green-700 text-white rounded px-3 py-1.5 text-xs transition-colors" title="实时回放TBT数据">
+            ▶ 回放
+          </button>
+        </div>
+        <!-- 进度条 -->
+        <div id="tbtProgress" class="hidden">
+          <div class="flex justify-between text-slate-500 mb-1 text-xs">
+            <span class="progress-pulse">⏳ 解析中…</span>
+            <span id="tbtProgressPct">0%</span>
+          </div>
+          <div class="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+            <div id="tbtProgressBar" class="h-full bg-amber-500 rounded-full transition-all duration-150" style="width:0%"></div>
+          </div>
+        </div>
+        <!-- 回放控制 -->
+        <div id="tbtReplayControls" class="hidden pt-1.5 space-y-1.5 border-t border-slate-700">
+          <div class="flex items-center gap-2">
+            <span class="text-slate-400">回放速度</span>
+            <select id="tbtReplaySpeed" class="bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs">
+              <option value="1">1x</option>
+              <option value="5" selected>5x</option>
+              <option value="20">20x</option>
+              <option value="100">100x</option>
+              <option value="0">最快</option>
+            </select>
+          </div>
+          <!-- 时间 + 交易时段 -->
+          <div class="flex items-center justify-between">
+            <span id="tbtReplayTime" class="text-amber-400 text-xs font-mono">—</span>
+            <span id="tbtSessionLabel" class="text-xs font-semibold px-1.5 py-0.5 rounded"></span>
+          </div>
+          <!-- 可拖拽进度条（点击/拖动跳转） -->
+          <input id="tbtSeekBar" type="range" min="0" max="10000" value="0" step="1"
+            class="w-full cursor-pointer accent-green-500" title="拖动跳转到指定时间" />
+          <div class="flex gap-1">
+            <button id="btnTbtReplayPause" class="flex-1 bg-slate-600 hover:bg-slate-500 text-white rounded px-2 py-1 text-xs transition-colors">⏸ 暂停</button>
+            <button id="btnTbtReplayStop"  class="flex-1 bg-red-900/80 hover:bg-red-800 text-white rounded px-2 py-1 text-xs transition-colors">⏹ 停止</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 手动编辑 -->
+    <div class="bg-slate-800 rounded-lg p-3 border border-slate-700">
+      <div class="font-medium text-slate-200 mb-2 flex items-center gap-1 justify-between">
+        <span>✏️ 手动编辑</span>
+        <div class="flex gap-1">
+          <button id="btnAddBid" class="bg-green-700 hover:bg-green-600 text-white rounded px-2 py-0.5 text-xs">+买</button>
+          <button id="btnAddAsk" class="bg-red-700 hover:bg-red-600 text-white rounded px-2 py-0.5 text-xs">+卖</button>
+        </div>
+      </div>
+      <div id="manualEditTable" class="space-y-1 max-h-48 overflow-y-auto pr-1">
+        <div class="text-xs text-slate-500 text-center py-2">先生成或导入数据</div>
+      </div>
+      <button id="btnApplyEdit" class="mt-2 w-full bg-amber-600 hover:bg-amber-700 text-white rounded px-3 py-1.5 text-xs font-medium transition-colors">
+        ✅ 应用编辑并重构
+      </button>
+    </div>
+
+    <!-- 清洗参数 -->
+    <div class="bg-slate-800 rounded-lg p-3 border border-slate-700">
+      <div class="font-medium text-slate-200 mb-2 flex items-center gap-1">
+        <span>🔧</span> 清洗参数
+      </div>
+      <div class="space-y-2 text-xs">
+        <label class="flex items-center gap-2">
+          <input type="checkbox" id="chkMerge" checked class="accent-blue-500" />
+          <span class="text-slate-300">合并同价档位</span>
+        </label>
+        <label class="flex items-center gap-2">
+          <input type="checkbox" id="chkSort" checked class="accent-blue-500" />
+          <span class="text-slate-300">自动排序（买降/卖升）</span>
+        </label>
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400">异常过滤阈值</span>
+          <input id="filterThreshold" type="number" value="3" min="0" max="100" step="1"
+            class="w-14 bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs text-center" />
+          <span class="text-slate-500">%</span>
+        </div>
+        <button id="btnReprocess" class="w-full bg-slate-600 hover:bg-slate-500 text-white rounded px-2 py-1 text-xs transition-colors">
+          🔄 重新清洗重构
+        </button>
+      </div>
+    </div>
+
+    <!-- 实时数据接口 -->
+    <div class="bg-slate-800 rounded-lg border border-slate-700">
+      <details>
+        <summary class="p-3 cursor-pointer flex items-center justify-between select-none">
+          <div class="font-medium text-slate-200 flex items-center gap-1.5 text-xs">
+            <span>🔌</span> 实时数据接口
+          </div>
+          <span class="text-slate-500 text-xs">▾</span>
+        </summary>
+        <div class="px-3 pb-3 space-y-2 text-xs">
+          <!-- 接入模式 -->
+          <div>
+            <label class="text-slate-400">接入模式</label>
+            <select id="apiMode" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs">
+              <option value="ws">WebSocket（推送）</option>
+              <option value="poll">HTTP 轮询</option>
+              <option value="replay">TBT文件回放</option>
+            </select>
+          </div>
+          <!-- 地址（WS / HTTP） -->
+          <div id="apiUrlGroup">
+            <label class="text-slate-400">接口地址</label>
+            <input id="apiUrl" type="text" value="ws://localhost:8080/orderbook"
+              class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs font-mono" />
+          </div>
+          <!-- 轮询间隔 -->
+          <div id="apiIntervalGroup" class="hidden">
+            <div class="flex items-center gap-2">
+              <span class="text-slate-400">轮询间隔</span>
+              <input id="apiInterval" type="number" value="1" min="0.5" max="60" step="0.5"
+                class="w-16 bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs text-center" />
+              <span class="text-slate-500">秒</span>
+            </div>
+          </div>
+          <!-- 数据格式 -->
+          <div id="apiFormatGroup">
+            <label class="text-slate-400">数据格式</label>
+            <select id="apiFormat" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs">
+              <option value="standard">标准快照 {bids, asks}</option>
+              <option value="binance">Binance 深度</option>
+              <option value="okx">OKX 深度</option>
+              <option value="delta">增量更新 (delta, qty=0删除)</option>
+              <option value="tbt_event">TBT单笔委托事件</option>
+            </select>
+          </div>
+          <!-- 交易所快速接入预设（JS按市场动态填充） -->
+          <div id="apiPresetsGroup" class="hidden">
+            <label class="text-slate-400">交易所快速接入</label>
+            <select id="apiPreset" class="w-full mt-0.5 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs">
+              <option value="">— 选择预设 —</option>
+            </select>
+            <div id="apiPresetNote" class="hidden mt-1 text-slate-500 bg-slate-900 rounded p-1.5 font-mono text-xs overflow-x-auto whitespace-pre"></div>
+          </div>
+          <!-- 连接/断开 -->
+          <div class="flex gap-1">
+            <button id="btnApiConnect"    class="flex-1 bg-blue-700 hover:bg-blue-600 text-white rounded px-2 py-1.5 text-xs font-medium transition-colors">🔗 连接</button>
+            <button id="btnApiDisconnect" class="flex-1 bg-slate-600 hover:bg-red-800 text-white rounded px-2 py-1.5 text-xs transition-colors" disabled>✕ 断开</button>
+          </div>
+          <!-- 状态 & 消息计数 -->
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-1.5">
+              <span id="apiStatusDot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+              <span id="apiStatusText" class="text-slate-500">未连接</span>
+            </div>
+            <span id="apiMsgCount" class="text-slate-600 hidden">已接收 0 条</span>
+          </div>
+          <!-- 格式提示 -->
+          <div id="apiFormatHint" class="hidden text-slate-500 bg-slate-900 rounded p-2 font-mono overflow-x-auto whitespace-pre text-xs leading-relaxed"></div>
+        </div>
+      </details>
+    </div>
+
+  </section>
+
+  <!-- ===== 中栏：可视化区 ===== -->
+  <section class="flex-1 flex flex-col gap-3 min-w-0">
+
+    <!-- 统计指标栏 -->
+    <div id="statsBar" class="bg-slate-800 rounded-lg p-3 border border-slate-700 grid grid-cols-5 gap-2 text-center">
+      <div><div class="text-slate-500 text-xs">最优买价</div><div id="statBestBid" class="text-green-400 font-bold text-sm">—</div></div>
+      <div><div class="text-slate-500 text-xs">最优卖价</div><div id="statBestAsk" class="text-red-400 font-bold text-sm">—</div></div>
+      <div><div class="text-slate-500 text-xs">中间价</div><div id="statMid" class="text-white font-bold text-sm">—</div></div>
+      <div><div class="text-slate-500 text-xs">价差(bps)</div><div id="statSpread" class="text-yellow-400 font-bold text-sm">—</div></div>
+      <div><div class="text-slate-500 text-xs">不平衡度</div><div id="statImbalance" class="text-purple-400 font-bold text-sm">—</div></div>
+    </div>
+
+    <!-- 价格倒挂警告 -->
+    <div id="warningBanner" class="hidden bg-amber-900/50 border border-amber-500 rounded-lg p-2 text-xs text-amber-300 text-center">
+      ⚠️ 检测到价格倒挂：最优买价 ≥ 最优卖价，请检查数据
+    </div>
+
+    <!-- 深度图 -->
+    <div class="bg-slate-800 rounded-lg p-3 border border-slate-700 flex-1 flex flex-col">
+      <div class="font-medium text-slate-200 mb-2 text-xs flex items-center justify-between">
+        <span>📈 盘口深度图</span>
+        <span class="text-slate-500 text-xs">买盘(绿) / 卖盘(红)</span>
+      </div>
+      <div class="relative flex-1" style="min-height:280px;">
+        <canvas id="depthChart"></canvas>
+      </div>
+    </div>
+
+    <!-- 市场格式说明 -->
+    <div class="bg-slate-800 rounded-lg p-3 border border-slate-700">
+      <div class="font-medium text-slate-200 mb-2 text-xs">📋 支持的导入格式示例</div>
+      <div id="formatExample" class="text-xs font-mono text-slate-400 bg-slate-900 rounded p-2 overflow-x-auto whitespace-pre"></div>
+    </div>
+
+  </section>
+
+  <!-- ===== 右栏：重构结果 ===== -->
+  <section class="w-80 flex-shrink-0 flex flex-col gap-3">
+
+    <!-- 重构结果标题 -->
+    <div class="bg-slate-800 rounded-lg p-3 border border-slate-700 flex items-center justify-between">
+      <div>
+        <div class="font-medium text-slate-200 text-xs">🏗️ 重构结果</div>
+        <div id="obMeta" class="text-slate-500 text-xs mt-0.5">等待数据…</div>
+      </div>
+      <div class="flex gap-1">
+        <button id="btnExportJSON" disabled class="bg-slate-600 hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded px-2 py-1 text-xs transition-colors">
+          ↓ JSON
+        </button>
+        <button id="btnExportCSV" disabled class="bg-slate-600 hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded px-2 py-1 text-xs transition-colors">
+          ↓ CSV
+        </button>
+      </div>
+    </div>
+
+    <!-- 订单簿双边表 -->
+    <div class="bg-slate-800 rounded-lg border border-slate-700 flex flex-col flex-1">
+      <!-- 卖盘 -->
+      <div class="p-2 border-b border-slate-700">
+        <div class="text-xs text-red-400 font-medium mb-1 flex justify-between">
+          <span>卖盘 (Asks)</span>
+          <span id="askTotal" class="text-slate-500">—</span>
+        </div>
+        <div class="ob-table-wrap">
+          <table class="w-full text-xs">
+            <thead class="text-slate-500 sticky top-0 bg-slate-800">
+              <tr>
+                <th class="text-right py-0.5 pr-2 font-normal">档位</th>
+                <th class="text-right py-0.5 pr-2 font-normal">价格</th>
+                <th class="text-right py-0.5 font-normal">数量</th>
+              </tr>
+            </thead>
+            <tbody id="askTableBody">
+              <tr><td colspan="3" class="text-center text-slate-600 py-3">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <!-- 中间价分隔 -->
+      <div id="midPriceDivider" class="px-3 py-1.5 bg-slate-750 border-b border-slate-700 text-center text-xs text-slate-400 font-medium">
+        中间价 —
+      </div>
+      <!-- 买盘 -->
+      <div class="p-2">
+        <div class="text-xs text-green-400 font-medium mb-1 flex justify-between">
+          <span>买盘 (Bids)</span>
+          <span id="bidTotal" class="text-slate-500">—</span>
+        </div>
+        <div class="ob-table-wrap">
+          <table class="w-full text-xs">
+            <thead class="text-slate-500 sticky top-0 bg-slate-800">
+              <tr>
+                <th class="text-right py-0.5 pr-2 font-normal">档位</th>
+                <th class="text-right py-0.5 pr-2 font-normal">价格</th>
+                <th class="text-right py-0.5 font-normal">数量</th>
+              </tr>
+            </thead>
+            <tbody id="bidTableBody">
+              <tr><td colspan="3" class="text-center text-slate-600 py-3">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<!-- ===== 页脚 ===== -->
+<footer class="bg-slate-800 border-t border-slate-700 px-4 py-1.5 text-slate-500 text-xs flex justify-between">
+  <span>多市场订单簿重构工具 v1.0 | 纯本地运行，数据不上传</span>
+  <span id="footerStatus">就绪</span>
+</footer>
+
+
+<!-- =====================================================================
+     JavaScript 核心逻辑
+     模块：MarketConfig / MockGenerator / DataParser / DataCleaner
+             OrderBookRenderer / ChartRenderer / Exporter / App
+     ===================================================================== -->
+<script>
+'use strict';
+
+/* ===================================================================
+   1. MarketConfig — 各市场配置
+   =================================================================== */
+const MarketConfig = {
+  ashare: {
+    name: 'A股',
+    currency: 'CNY',
+    priceDecimals: 2,
+    qtyDecimals: 0,
+    tickSize: 0.01,
+    lotSize: 100,
+    limitPct: 10,          // 涨跌停幅度(%)
+    defaultBase: 10.00,
+    defaultSymbol: '000001',
+    formatExample: `// A股标准JSON格式
+{"bids":[{"p":10.00,"v":1000},{"p":9.99,"v":2000}],
+ "asks":[{"p":10.01,"v":800},{"p":10.02,"v":1500}]}
+
+// 或二维数组格式（价格,数量）
+{"bids":[[10.00,1000],[9.99,2000]],
+ "asks":[[10.01,800],[10.02,1500]]}`
+  },
+  us: {
+    name: '美股',
+    currency: 'USD',
+    priceDecimals: 2,
+    qtyDecimals: 0,
+    tickSize: 0.01,
+    lotSize: 1,
+    limitPct: null,
+    defaultBase: 150.00,
+    defaultSymbol: 'AAPL',
+    formatExample: `// 美股标准JSON格式
+{"bids":[[149.99,200],[149.98,500]],
+ "asks":[[150.00,150],[150.01,300]]}
+
+// CSV格式
+side,price,qty
+bid,149.99,200
+ask,150.00,150`
+  },
+  hk: {
+    name: '港股',
+    currency: 'HKD',
+    priceDecimals: 3,
+    qtyDecimals: 0,
+    tickSize: 0.01,
+    lotSize: 500,
+    limitPct: null,
+    defaultBase: 50.00,
+    defaultSymbol: '00700',
+    formatExample: `// 港股标准JSON格式
+{"bids":[[49.990,1000],[49.980,2000]],
+ "asks":[[50.000,800],[50.010,1500]]}`
+  },
+  futures: {
+    name: '期货',
+    currency: 'CNY',
+    priceDecimals: 2,
+    qtyDecimals: 0,
+    tickSize: 2,
+    lotSize: 10,           // 手
+    limitPct: 5,
+    defaultBase: 5000.00,
+    defaultSymbol: 'IF2403',
+    formatExample: `// 期货标准JSON格式
+{"symbol":"IF2403",
+ "bids":[[5000,50],[4998,100]],
+ "asks":[[5002,30],[5004,80]]}`
+  },
+  crypto: {
+    name: '加密货币',
+    currency: 'USDT',
+    priceDecimals: 2,
+    qtyDecimals: 4,
+    tickSize: 0.01,
+    lotSize: 0.0001,
+    limitPct: null,
+    defaultBase: 43000.00,
+    defaultSymbol: 'BTCUSDT',
+    formatExample: `// Binance格式（字符串数组）
+{"bids":[["43250.50","0.2450"],["43250.00","0.5000"]],
+ "asks":[["43251.00","0.1800"],["43251.50","0.3200"]]}
+
+// 或对象数组
+{"bids":[{"price":"43250.50","quantity":"0.2450"}],
+ "asks":[{"price":"43251.00","quantity":"0.1800"}]}`
+  }
+};
+
+
+/* ===================================================================
+   1b. TradingSessions — 各市场交易时段规则
+   =================================================================== */
+const TradingSessions = {
+  ashare: [
+    { from: 915,  to: 925,  name: '集中竞价', type: 'auction',    color: '#f59e0b' },
+    { from: 925,  to: 930,  name: '集合竞价', type: 'auction',    color: '#f59e0b' },
+    { from: 930,  to: 1130, name: '上午连续', type: 'continuous', color: '#22c55e' },
+    { from: 1300, to: 1457, name: '下午连续', type: 'continuous', color: '#22c55e' },
+    { from: 1457, to: 1500, name: '收盘竞价', type: 'closing',    color: '#3b82f6' },
+  ],
+  us: [
+    { from:  400, to:  930, name: '盘前交易', type: 'pre',        color: '#f59e0b' },
+    { from:  930, to: 1600, name: '正常交易', type: 'continuous', color: '#22c55e' },
+    { from: 1600, to: 2000, name: '盘后交易', type: 'post',       color: '#3b82f6' },
+  ],
+  hk: [
+    { from:  900, to:  930, name: '开盘竞价', type: 'auction',    color: '#f59e0b' },
+    { from:  930, to: 1200, name: '上午持续', type: 'continuous', color: '#22c55e' },
+    { from: 1300, to: 1600, name: '下午持续', type: 'continuous', color: '#22c55e' },
+    { from: 1600, to: 1610, name: '收市竞价', type: 'closing',    color: '#3b82f6' },
+  ],
+  futures: [
+    { from: 2100, to: 2359, name: '夜盘',   type: 'night', color: '#a855f7' },
+    { from:    0, to:  230, name: '夜盘',   type: 'night', color: '#a855f7' },
+    { from:  900, to: 1015, name: '日盘①', type: 'day',   color: '#22c55e' },
+    { from: 1030, to: 1130, name: '日盘②', type: 'day',   color: '#22c55e' },
+    { from: 1330, to: 1500, name: '日盘③', type: 'day',   color: '#22c55e' },
+  ],
+  crypto: [
+    { from: 0, to: 2400, name: '全天交易', type: 'continuous', color: '#22c55e' },
+  ],
+
+  /** 根据时间字符串 "HH:MM:SS.mmm" 获取当前时段 */
+  getSessionFromStr(market, clockStr) {
+    const list = this[market];
+    if (!Array.isArray(list) || !clockStr) return null;
+    const parts = clockStr.split(':');
+    if (parts.length < 2) return null;
+    const hm = parseInt(parts[0]) * 100 + parseInt(parts[1]);
+    return list.find(s => hm >= s.from && hm < s.to) || null;
+  },
+
+  /** 获取市场时段列表，供UI展示 */
+  getScheduleHtml(market) {
+    const list = this[market];
+    if (!Array.isArray(list)) return '';
+    const fmt = n => `${String(Math.floor(n/100)).padStart(2,'0')}:${String(n%100).padStart(2,'0')}`;
+    return list.map(s =>
+      `<div class="flex justify-between"><span style="color:${s.color}" class="font-medium">${s.name}</span>` +
+      `<span class="text-slate-500">${fmt(s.from)}–${fmt(s.to)}</span></div>`
+    ).join('');
+  }
+};
+
+
+/* ===================================================================
+   1c. MarketAPIPresets — 各市场实时接口预设
+   =================================================================== */
+const MarketAPIPresets = {
+  crypto: [
+    { label: 'Binance 现货 BTC/USDT (20档)',   url: 'wss://stream.binance.com:9443/ws/btcusdt@depth20@100ms', format: 'binance' },
+    { label: 'Binance 现货 ETH/USDT (20档)',   url: 'wss://stream.binance.com:9443/ws/ethusdt@depth20@100ms', format: 'binance' },
+    { label: 'Binance U本位合约 BTC',          url: 'wss://fstream.binance.com/ws/btcusdt@depth20@100ms',    format: 'binance' },
+    { label: 'OKX 现货 BTC-USDT (5档)',        url: 'wss://ws.okx.com:8443/ws/v5/public', format: 'okx',
+      subscribe: '{"op":"subscribe","args":[{"channel":"books5","instId":"BTC-USDT"}]}',
+      note: '连接后自动发送订阅消息' },
+    { label: 'OKX 现货 ETH-USDT (5档)',        url: 'wss://ws.okx.com:8443/ws/v5/public', format: 'okx',
+      subscribe: '{"op":"subscribe","args":[{"channel":"books5","instId":"ETH-USDT"}]}',
+      note: '连接后自动发送订阅消息' },
+  ],
+  ashare: [
+    { label: '本地Level2推送 (CTP/QMT通道)', url: 'ws://localhost:8080/orderbook', format: 'tbt_event',
+      note: '需要自建本地转发服务，监听券商L2行情并推送TBT事件格式' },
+    { label: 'HTTP轮询接口示例',               url: 'http://localhost:8080/orderbook', format: 'standard',
+      note: '配合HTTP轮询模式使用' },
+  ],
+  us: [
+    { label: 'Alpaca Market Data (需API Key)', url: 'wss://stream.data.alpaca.markets/v2/iex', format: 'standard',
+      note: '需先HTTP鉴权，获取token后填入此WS' },
+    { label: '本地中转服务',                    url: 'ws://localhost:8080/orderbook', format: 'standard' },
+  ],
+  hk: [
+    { label: '本地Level2接口 (ODP/Futu通道)', url: 'ws://localhost:8080/orderbook', format: 'standard',
+      note: '可对接富途、老虎等Level2接口后本地转发' },
+  ],
+  futures: [
+    { label: '本地CTP行情接口',                url: 'ws://localhost:8080/orderbook', format: 'tbt_event',
+      note: 'CTP MdApi行情需本地转发，推荐vnpy/openctp等框架' },
+  ],
+};
+const MockGenerator = {
+  /**
+   * 生成指定市场的模拟订单簿原始数据
+   * @param {string} market  市场key
+   * @param {number} base    基准价格
+   * @param {number} levels  生成档位数
+   * @returns {{bids:Array, asks:Array}}
+   */
+  generate(market, base, levels = 20) {
+    const cfg = MarketConfig[market];
+    const tick = cfg.tickSize;
+    const bids = [], asks = [];
+
+    for (let i = 0; i < levels; i++) {
+      // 买盘：基准价往下，每档随机1-3个tick
+      const bidPrice = parseFloat((base - tick * (i + 1) * (0.8 + Math.random() * 0.6)).toFixed(cfg.priceDecimals));
+      const askPrice = parseFloat((base + tick * (i + 1) * (0.8 + Math.random() * 0.6)).toFixed(cfg.priceDecimals));
+
+      // 数量：越深越少，加随机波动
+      const qtyScale = market === 'crypto' ? 0.5 : (cfg.lotSize || 1);
+      const bidQty  = parseFloat(((Math.random() * 5 + 1) * qtyScale * (1 - i * 0.02)).toFixed(cfg.qtyDecimals));
+      const askQty  = parseFloat(((Math.random() * 5 + 1) * qtyScale * (1 - i * 0.02)).toFixed(cfg.qtyDecimals));
+
+      bids.push({ price: bidPrice, qty: bidQty });
+      asks.push({ price: askPrice, qty: askQty });
+    }
+    return { bids, asks };
+  }
+};
+
+
+/* ===================================================================
+   3. DataParser — 文件 / 文本解析，统一输出 {bids, asks} 原始数组
+   =================================================================== */
+const DataParser = {
+  /**
+   * 解析JSON字符串（兼容多种字段名、数组格式）
+   */
+  parseJSON(text) {
+    const obj = JSON.parse(text); // 抛出异常由上层catch
+
+    const rawBids = obj.bids || obj.buy || obj.bid || [];
+    const rawAsks = obj.asks || obj.sell || obj.ask || [];
+
+    return {
+      bids: this._normalizeRows(rawBids),
+      asks: this._normalizeRows(rawAsks),
+      symbol: obj.symbol || obj.s || null,
+      timestamp: obj.timestamp || obj.time || obj.T || null
+    };
+  },
+
+  /**
+   * 解析CSV字符串（支持 side,price,qty 格式）
+   */
+  parseCSV(text) {
+    const lines = text.trim().split(/\r?\n/);
+    const header = lines[0].toLowerCase().split(',').map(s => s.trim());
+    const sideIdx  = header.indexOf('side');
+    const priceIdx = ['price','p','px'].map(k => header.indexOf(k)).find(i => i >= 0) ?? 1;
+    const qtyIdx   = ['qty','quantity','vol','volume','q','v'].map(k => header.indexOf(k)).find(i => i >= 0) ?? 2;
+
+    const bids = [], asks = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(s => s.trim());
+      if (cols.length < 2) continue;
+      const price = parseFloat(cols[priceIdx]);
+      const qty   = parseFloat(cols[qtyIdx]);
+      if (isNaN(price) || isNaN(qty)) continue;
+
+      if (sideIdx >= 0) {
+        const side = cols[sideIdx].toLowerCase();
+        if (side === 'bid' || side === 'buy' || side === 'b') bids.push({ price, qty });
+        else asks.push({ price, qty });
+      } else {
+        // 无side列：按price升序，自动按中位划分买卖
+        bids.push({ price, qty }); // 后续由cleaner判断
+      }
+    }
+    return { bids, asks };
+  },
+
+  /** 统一各种行格式为 {price, qty} */
+  _normalizeRows(rows) {
+    return rows.map(row => {
+      if (Array.isArray(row)) {
+        return { price: parseFloat(row[0]), qty: parseFloat(row[1]) };
+      }
+      // 对象格式，兼容多种字段名
+      const price = parseFloat(row.price ?? row.p ?? row.px ?? row.Price ?? 0);
+      const qty   = parseFloat(row.qty ?? row.quantity ?? row.q ?? row.vol ?? row.size ?? row.v ?? 0);
+      return { price, qty };
+    }).filter(r => !isNaN(r.price) && !isNaN(r.qty));
+  }
+};
+
+
+/* ===================================================================
+   3b. TBTParser — A股Level2逐笔数据解析与订单簿重构
+   字段：type, clock, clock_int, symbol, entrust_volume, entrust_dir(1买/2卖),
+         entrust_orderType, entrust_orderStatus(0新增/1撤销), entrust_price,
+         entrust_orderNum, transaction_volume, transaction_buyNum, transaction_sellNum
+   =================================================================== */
+const TBTParser = {
+  /** 判断CSV首行是否为TBT格式 */
+  isTBT(headerLine) {
+    return headerLine.includes('entrust_dir') && headerLine.includes('entrust_price');
+  },
+
+  /** 格式化clock_int（如91500040）→ "09:15:00.040" */
+  formatClock(clockInt) {
+    const s = String(clockInt).padStart(9, '0');
+    return `${s.slice(0,2)}:${s.slice(2,4)}:${s.slice(4,6)}.${s.slice(6,9)}`;
+  },
+
+  /** 从文件头尾提取时间范围（快速扫描，不全量解析） */
+  getTimeRange(lines) {
+    const firstData = lines[1]  || '';
+    const lastData  = lines[lines.length - 1] || '';
+    const getTime = line => { const c = line.split(','); return c[1] || ''; };
+    return { first: getTime(firstData), last: getTime(lastData) };
+  },
+
+  /**
+   * 重构订单簿（异步，避免阻塞UI）
+   * @param {string[]} lines      CSV行数组（含header）
+   * @param {string}   snapTime   快照时间 "HH:MM:SS" 或 null=全量
+   * @param {Function} onProgress 进度回调 (0-1)
+   * @returns {Promise<{bids, asks, symbol, firstTs, lastTs, stats}>}
+   */
+  async reconstruct(lines, snapTime, onProgress) {
+    const header = lines[0].split(',');
+    // 字段索引映射
+    const I = {
+      type:    header.indexOf('type'),
+      clock:   header.indexOf('clock'),
+      clockI:  header.indexOf('clock_int'),
+      sym:     header.indexOf('symbol'),
+      vol:     header.indexOf('entrust_volume'),
+      dir:     header.indexOf('entrust_dir'),
+      status:  header.indexOf('entrust_orderStatus'),
+      price:   header.indexOf('entrust_price'),
+      oNum:    header.indexOf('entrust_orderNum'),
+      txVol:   header.indexOf('transaction_volume'),
+      txBuy:   header.indexOf('transaction_buyNum'),
+      txSell:  header.indexOf('transaction_sellNum'),
+    };
+
+    // 快照截止时间（"2025-12-31 HH:MM:SS"格式）
+    const datePrefix = lines[1] ? lines[1].split(',')[I.clock].split(' ')[0] : '';
+    const cutoff = snapTime ? `${datePrefix} ${snapTime}` : null;
+
+    const orderMap = {};   // orderNum -> {side, price, remaining}
+    const bids     = {};   // price -> qty
+    const asks     = {};   // price -> qty
+    const stats    = { totalOrders: 0, totalCancels: 0, totalTrans: 0 };
+    let symbol = '', firstTs = '', lastTs = '';
+
+    const total = lines.length;
+    const BATCH = 8000; // 每批处理行数
+
+    for (let i = 1; i < total; i++) {
+      // 每批yield一次，刷新UI进度
+      if (i % BATCH === 0) {
+        if (onProgress) onProgress(i / total);
+        await new Promise(r => setTimeout(r, 0));
+      }
+
+      const line = lines[i];
+      if (!line || !line.trim()) continue;
+      const cols = line.split(',');
+
+      const clock = cols[I.clock];
+      if (cutoff && clock > cutoff) break;  // 超过快照时间停止
+
+      if (!firstTs) firstTs = clock;
+      lastTs = clock;
+      if (!symbol && I.sym >= 0) symbol = cols[I.sym].replace(/^0\./, '');
+
+      const rowType = (cols[I.type] || '').trim();
+
+      if (rowType === 'order') {
+        const dir    = parseInt(cols[I.dir]);
+        const status = parseInt(cols[I.status]);
+        const price  = parseFloat(cols[I.price]);
+        const vol    = parseFloat(cols[I.vol]);
+        const oNum   = (cols[I.oNum] || '').trim();
+
+        if (status === 0) {
+          // 新增委托：加入订单簿
+          stats.totalOrders++;
+          if (price > 0 && vol > 0) {
+            orderMap[oNum] = { side: dir, price, remaining: vol };
+            if (dir === 1) bids[price] = (bids[price] || 0) + vol;
+            else if (dir === 2) asks[price] = (asks[price] || 0) + vol;
+          }
+
+        } else if (status === 1) {
+          // 撤销委托：从订单簿减去剩余量
+          stats.totalCancels++;
+          const orig = orderMap[oNum];
+          if (orig) {
+            if (orig.side === 1) bids[orig.price] = Math.max(0, (bids[orig.price] || 0) - orig.remaining);
+            else asks[orig.price] = Math.max(0, (asks[orig.price] || 0) - orig.remaining);
+            delete orderMap[oNum];
+          } else if (price > 0 && vol > 0) {
+            // 兜底：撤单编号未命中时，直接用本行的 dir/price/vol 减量
+            if (dir === 1) bids[price] = Math.max(0, (bids[price] || 0) - vol);
+            else if (dir === 2) asks[price] = Math.max(0, (asks[price] || 0) - vol);
+          }
+        }
+
+      } else if (rowType === 'trade') {
+        // 成交：减去已成交量（注意：实际TBT数据中type字段值为'trade'而非'transaction'）
+        stats.totalTrans++;
+        const txVol  = parseFloat(cols[I.txVol]);
+        const txBuy  = (cols[I.txBuy]  || '').trim();
+        const txSell = (cols[I.txSell] || '').trim();
+        const buyO   = orderMap[txBuy];
+        const sellO  = orderMap[txSell];
+        if (buyO) {
+          const reduce = Math.min(buyO.remaining, txVol);
+          buyO.remaining -= reduce;
+          bids[buyO.price] = Math.max(0, (bids[buyO.price] || 0) - reduce);
+          if (buyO.remaining <= 0) delete orderMap[txBuy];
+        }
+        if (sellO) {
+          const reduce = Math.min(sellO.remaining, txVol);
+          sellO.remaining -= reduce;
+          asks[sellO.price] = Math.max(0, (asks[sellO.price] || 0) - reduce);
+          if (sellO.remaining <= 0) delete orderMap[txSell];
+        }
+      }
+    }
+
+    if (onProgress) onProgress(1);
+
+    // 构建输出数组（过滤零量档位，买盘降序/卖盘升序）
+    const bidRows = Object.entries(bids)
+      .filter(([, q]) => q > 1e-9)
+      .map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q.toFixed(2)) }))
+      .sort((a, b) => b.price - a.price);
+    const askRows = Object.entries(asks)
+      .filter(([, q]) => q > 1e-9)
+      .map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q.toFixed(2)) }))
+      .sort((a, b) => a.price - b.price);
+
+    return { bids: bidRows, asks: askRows, symbol, firstTs, lastTs, stats };
+  },
+
+  /**
+   * 构建回放所需的分组数据：按 clock_int 分组所有行
+   * 返回 { groups: Map<clockInt, cols[][]>, keys: string[], idxMap }
+   */
+  async buildReplayGroups(lines, onProgress) {
+    const header = lines[0].split(',');
+    const clockIIdx = header.indexOf('clock_int');
+    const total = lines.length;
+    const BATCH = 8000;
+    const groups = new Map();
+
+    for (let i = 1; i < total; i++) {
+      if (i % BATCH === 0) {
+        if (onProgress) onProgress(i / total);
+        await new Promise(r => setTimeout(r, 0));
+      }
+      const line = lines[i];
+      if (!line || !line.trim()) continue;
+      const cols = line.split(',');
+      const key  = cols[clockIIdx];
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(cols);
+    }
+
+    const I = {
+      type: 0, clock: 1, clockI: header.indexOf('clock_int'),
+      sym: header.indexOf('symbol'),
+      vol: header.indexOf('entrust_volume'),
+      dir: header.indexOf('entrust_dir'),
+      status: header.indexOf('entrust_orderStatus'),
+      price: header.indexOf('entrust_price'),
+      oNum: header.indexOf('entrust_orderNum'),
+      txVol: header.indexOf('transaction_volume'),
+      txBuy: header.indexOf('transaction_buyNum'),
+      txSell: header.indexOf('transaction_sellNum'),
+    };
+
+    return { groups, keys: [...groups.keys()].sort((a, b) => Number(a) - Number(b)), idxMap: I };
+  }
+};
+
+
+/* ===================================================================
+   4. DataCleaner — 清洗 & 重构，输出标准订单簿对象
+   =================================================================== */
+const DataCleaner = {
+  /**
+   * 清洗并重构订单簿
+   * @param {{bids,asks}}   raw       原始数据
+   * @param {object}        cfg       市场配置
+   * @param {object}        options   清洗选项
+   * @param {number}        levels    目标档位数
+   * @returns {object}                标准订单簿对象
+   */
+  clean(raw, cfg, options = {}, levels = 10) {
+    const { merge = true, sort = true, filterPct = 10 } = options;
+
+    let bids = this._validateRows(raw.bids);
+    let asks = this._validateRows(raw.asks);
+
+    // 合并同价
+    if (merge) {
+      bids = this._mergeByPrice(bids);
+      asks = this._mergeByPrice(asks);
+    }
+
+    // 排序
+    if (sort) {
+      bids.sort((a, b) => b.price - a.price); // 降序
+      asks.sort((a, b) => a.price - b.price); // 升序
+    }
+
+    // 先清除穿越/倒挂价位，再做百分比过滤
+    // 必须先做：否则异常低卖价会成为 bestAsk，导致百分比过滤把正常卖单全部过滤掉
+    if (bids.length && asks.length) {
+      const bestBid = bids[0].price;
+      const bestAsk = asks[0].price;
+      if (bestBid >= bestAsk) {
+        // 倒挂：卖单存在异常低价（如市价单以1元入账）
+        // 移除所有 <= bestBid 的卖单，使卖盘回到正常区间
+        asks = asks.filter(r => r.price > bestBid);
+        // 移除 >= 新卖一 的买单（如有）
+        if (asks.length) bids = bids.filter(r => r.price < asks[0].price);
+      } else {
+        // 正常盘口：清除已穿越价位
+        asks = asks.filter(r => r.price > bestBid);
+        bids = bids.filter(r => r.price < bestAsk);
+      }
+    }
+
+    // 异常价格过滤（基于清洁后的 bestBid / bestAsk）
+    if (filterPct > 0 && bids.length && asks.length) {
+      const bestBid = bids[0].price;
+      const bestAsk = asks[0].price;
+      bids = bids.filter(r => r.price >= bestBid * (1 - filterPct / 100));
+      asks = asks.filter(r => r.price <= bestAsk * (1 + filterPct / 100));
+    }
+
+    // 截取档位
+    bids = bids.slice(0, levels);
+    asks = asks.slice(0, levels);
+
+    // 计算统计指标
+    const stats = this._calcStats(bids, asks, cfg);
+
+    return { bids, asks, stats };
+  },
+
+  /** 过滤无效行（price/qty必须>0） */
+  _validateRows(rows) {
+    return (rows || []).filter(r => r.price > 0 && r.qty > 0 && !isNaN(r.price) && !isNaN(r.qty));
+  },
+
+  /** 合并相同价格的档位 */
+  _mergeByPrice(rows) {
+    const map = new Map();
+    rows.forEach(r => {
+      map.set(r.price, (map.get(r.price) || 0) + r.qty);
+    });
+    return Array.from(map.entries()).map(([price, qty]) => ({ price, qty }));
+  },
+
+  /** 计算统计指标 */
+  _calcStats(bids, asks, cfg) {
+    if (!bids.length || !asks.length) return null;
+    const bestBid  = bids[0].price;
+    const bestAsk  = asks[0].price;
+    const mid      = (bestBid + bestAsk) / 2;
+    const spread   = parseFloat((bestAsk - bestBid).toFixed(cfg.priceDecimals));
+    const spreadBps = mid > 0 ? parseFloat(((spread / mid) * 10000).toFixed(2)) : 0;
+    const bidTotal  = parseFloat(bids.reduce((s, r) => s + r.qty, 0).toFixed(cfg.qtyDecimals));
+    const askTotal  = parseFloat(asks.reduce((s, r) => s + r.qty, 0).toFixed(cfg.qtyDecimals));
+    const imbalance = (bidTotal + askTotal) > 0
+      ? parseFloat(((bidTotal - askTotal) / (bidTotal + askTotal)).toFixed(4))
+      : 0;
+    return { bestBid, bestAsk, mid: parseFloat(mid.toFixed(cfg.priceDecimals)),
+             spread, spreadBps, bidTotal, askTotal, imbalance };
+  }
+};
+
+
+/* ===================================================================
+   5. OrderBookRenderer — 订单簿表格渲染
+   =================================================================== */
+const OrderBookRenderer = {
+  render(ob, cfg) {
+    const { bids, asks, stats } = ob;
+
+    // 统计指标
+    if (stats) {
+      this._setText('statBestBid',  stats.bestBid?.toFixed(cfg.priceDecimals) ?? '—');
+      this._setText('statBestAsk',  stats.bestAsk?.toFixed(cfg.priceDecimals) ?? '—');
+      this._setText('statMid',      stats.mid?.toFixed(cfg.priceDecimals) ?? '—');
+      this._setText('statSpread',   `${stats.spread?.toFixed(cfg.priceDecimals)} (${stats.spreadBps})`);
+      const imb = stats.imbalance;
+      const imbEl = document.getElementById('statImbalance');
+      imbEl.textContent = imb?.toFixed(4) ?? '—';
+      imbEl.className = `font-bold text-sm ${imb > 0.1 ? 'text-green-400' : imb < -0.1 ? 'text-red-400' : 'text-purple-400'}`;
+      this._setText('midPriceDivider', `中间价  ${stats.mid?.toFixed(cfg.priceDecimals)} ${cfg.currency}`);
+      this._setText('askTotal', `总量: ${stats.askTotal}`);
+      this._setText('bidTotal', `总量: ${stats.bidTotal}`);
+    }
+
+    // 价格倒挂警告
+    const warning = document.getElementById('warningBanner');
+    if (stats && stats.spread <= 0) {
+      warning.classList.remove('hidden');
+    } else {
+      warning.classList.add('hidden');
+    }
+
+    // 计算最大数量（用于背景条百分比）
+    const maxQty = Math.max(
+      ...bids.map(r => r.qty),
+      ...asks.map(r => r.qty), 1
+    );
+
+    // 渲染卖盘（显示顺序：档位越大越靠上，离中间价最近的在最下）
+    const askBody = document.getElementById('askTableBody');
+    askBody.innerHTML = asks.length ? [...asks].reverse().map((r, i) => {
+      const level = asks.length - i;
+      const pct   = (r.qty / maxQty * 100).toFixed(1);
+      return `<tr class="ask-bar hover:bg-slate-700/50" style="--pct:${pct}%">
+        <td class="text-right pr-2 py-0.5 text-slate-500">A${level}</td>
+        <td class="text-right pr-2 py-0.5 text-red-400 font-mono">${r.price.toFixed(cfg.priceDecimals)}</td>
+        <td class="text-right py-0.5 text-slate-300 font-mono">${r.qty.toFixed(cfg.qtyDecimals)}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="3" class="text-center text-slate-600 py-3">暂无卖盘数据</td></tr>';
+
+    // 渲染买盘
+    const bidBody = document.getElementById('bidTableBody');
+    bidBody.innerHTML = bids.length ? bids.map((r, i) => {
+      const pct = (r.qty / maxQty * 100).toFixed(1);
+      return `<tr class="bid-bar hover:bg-slate-700/50" style="--pct:${pct}%">
+        <td class="text-right pr-2 py-0.5 text-slate-500">B${i + 1}</td>
+        <td class="text-right pr-2 py-0.5 text-green-400 font-mono">${r.price.toFixed(cfg.priceDecimals)}</td>
+        <td class="text-right py-0.5 text-slate-300 font-mono">${r.qty.toFixed(cfg.qtyDecimals)}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="3" class="text-center text-slate-600 py-3">暂无买盘数据</td></tr>';
+
+    // 元信息
+    const obMeta = document.getElementById('obMeta');
+    obMeta.textContent = `${cfg.name} | ${App.state.symbol} | 买${bids.length}档 卖${asks.length}档`;
+
+    // 启用导出按钮
+    document.getElementById('btnExportJSON').disabled = false;
+    document.getElementById('btnExportCSV').disabled  = false;
+  },
+
+  _setText(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  }
+};
+
+
+/* ===================================================================
+   6. ChartRenderer — Chart.js 深度图
+   =================================================================== */
+const ChartRenderer = {
+  _chart: null,
+
+  render(ob, cfg) {
+    const { bids, asks } = ob;
+    if (!bids.length && !asks.length) return;
+
+    // 累计深度数据
+    const bidPrices = [], bidCumQty = [];
+    let cumB = 0;
+    // 买盘：从最优价往深处排（已降序），累计
+    bids.forEach(r => { cumB += r.qty; bidPrices.push(r.price); bidCumQty.push(parseFloat(cumB.toFixed(cfg.qtyDecimals))); });
+
+    const askPrices = [], askCumQty = [];
+    let cumA = 0;
+    // 卖盘：从最优价往深处排（已升序），累计
+    asks.forEach(r => { cumA += r.qty; askPrices.push(r.price); askCumQty.push(parseFloat(cumA.toFixed(cfg.qtyDecimals))); });
+
+    // 合并所有价格点（用于X轴）
+    const allPrices = [...new Set([...bidPrices, ...askPrices])].sort((a, b) => a - b);
+
+    // 将买卖盘映射到统一价格轴
+    const bidDataMap = new Map(bidPrices.map((p, i) => [p, bidCumQty[i]]));
+    const askDataMap = new Map(askPrices.map((p, i) => [p, askCumQty[i]]));
+
+    const bidData = allPrices.map(p => bidDataMap.get(p) ?? null);
+    const askData = allPrices.map(p => askDataMap.get(p) ?? null);
+
+    const labels = allPrices.map(p => p.toFixed(cfg.priceDecimals));
+
+    if (this._chart) {
+      this._chart.data.labels = labels;
+      this._chart.data.datasets[0].data = bidData;
+      this._chart.data.datasets[1].data = askData;
+      this._chart.update('none');
+      return;
+    }
+
+    const ctx = document.getElementById('depthChart').getContext('2d');
+    this._chart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: '买盘累计量',
+            data: bidData,
+            borderColor: '#22c55e',
+            backgroundColor: 'rgba(34,197,94,0.12)',
+            fill: 'origin',
+            stepped: 'after',
+            pointRadius: 0,
+            pointHoverRadius: 3,
+            spanGaps: true,
+            tension: 0
+          },
+          {
+            label: '卖盘累计量',
+            data: askData,
+            borderColor: '#ef4444',
+            backgroundColor: 'rgba(239,68,68,0.12)',
+            fill: 'origin',
+            stepped: 'before',
+            pointRadius: 0,
+            pointHoverRadius: 3,
+            spanGaps: true,
+            tension: 0
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 200 },
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: '#94a3b8', font: { size: 11 } } },
+          tooltip: {
+            backgroundColor: '#1e293b',
+            borderColor: '#475569',
+            borderWidth: 1,
+            titleColor: '#e2e8f0',
+            bodyColor: '#94a3b8',
+            callbacks: {
+              title: items => `价格: ${items[0].label} ${cfg.currency}`,
+              label: item => `${item.dataset.label}: ${item.formattedValue}`
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#64748b', font: { size: 10 }, maxTicksLimit: 12, maxRotation: 0 },
+            grid: { color: '#1e293b' }
+          },
+          y: {
+            ticks: { color: '#64748b', font: { size: 10 } },
+            grid: { color: '#334155' }
+          }
+        }
+      }
+    });
+  },
+
+  /** 销毁旧图表（市场切换时调用） */
+  destroy() {
+    if (this._chart) { this._chart.destroy(); this._chart = null; }
+  }
+};
+
+
+/* ===================================================================
+   7. Exporter — 导出 JSON / CSV
+   =================================================================== */
+const Exporter = {
+  exportJSON(ob, cfg, symbol) {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const output = {
+      market:    cfg.name,
+      symbol:    symbol || 'UNKNOWN',
+      timestamp: new Date().toISOString(),
+      levels:    Math.max(ob.bids.length, ob.asks.length),
+      bids:      ob.bids.map(r => ({ price: r.price, qty: r.qty })),
+      asks:      ob.asks.map(r => ({ price: r.price, qty: r.qty })),
+      stats:     ob.stats
+    };
+    this._download(JSON.stringify(output, null, 2), `orderbook_${cfg.name}_${symbol}_${ts}.json`, 'application/json');
+  },
+
+  exportCSV(ob, cfg, symbol) {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const rows = [
+      'side,price,qty',
+      ...ob.asks.map(r => `ask,${r.price.toFixed(cfg.priceDecimals)},${r.qty.toFixed(cfg.qtyDecimals)}`),
+      ...ob.bids.map(r => `bid,${r.price.toFixed(cfg.priceDecimals)},${r.qty.toFixed(cfg.qtyDecimals)}`)
+    ];
+    this._download(rows.join('\n'), `orderbook_${cfg.name}_${symbol}_${ts}.csv`, 'text/csv');
+  },
+
+  _download(content, filename, mime) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([content], { type: mime }));
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+};
+
+
+/* ===================================================================
+   8. ManualEditManager — 手动编辑表格管理
+   =================================================================== */
+const ManualEditManager = {
+  /** 将当前重构后的数据填入手动编辑表格 */
+  populate(bids, asks, cfg) {
+    const container = document.getElementById('manualEditTable');
+    container.innerHTML = '';
+
+    const makeRow = (side, price, qty) => {
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-1';
+      row.dataset.side = side;
+      row.innerHTML = `
+        <span class="w-6 text-xs ${side === 'bid' ? 'text-green-400' : 'text-red-400'} font-medium">
+          ${side === 'bid' ? 'B' : 'A'}
+        </span>
+        <input type="number" value="${price}" step="${cfg.tickSize}" 
+          class="flex-1 bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono text-right price-input" />
+        <input type="number" value="${qty}" min="0"
+          class="flex-1 bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono text-right qty-input" />
+        <button class="text-slate-500 hover:text-red-400 text-xs px-1 del-btn" title="删除">✕</button>
+      `;
+      row.querySelector('.del-btn').addEventListener('click', () => row.remove());
+      return row;
+    };
+
+    // 卖盘倒序显示（高价在上）
+    [...asks].reverse().forEach(r => container.appendChild(makeRow('ask', r.price.toFixed(cfg.priceDecimals), r.qty.toFixed(cfg.qtyDecimals))));
+    bids.forEach(r => container.appendChild(makeRow('bid', r.price.toFixed(cfg.priceDecimals), r.qty.toFixed(cfg.qtyDecimals))));
+  },
+
+  /** 从编辑表格读取原始数据 */
+  collect() {
+    const rows = document.querySelectorAll('#manualEditTable [data-side]');
+    const bids = [], asks = [];
+    rows.forEach(row => {
+      const price = parseFloat(row.querySelector('.price-input').value);
+      const qty   = parseFloat(row.querySelector('.qty-input').value);
+      if (isNaN(price) || isNaN(qty) || price <= 0 || qty <= 0) return;
+      (row.dataset.side === 'bid' ? bids : asks).push({ price, qty });
+    });
+    return { bids, asks };
+  }
+};
+
+
+/* ===================================================================
+   9. RealtimeAPI — 实时数据接口（WebSocket / HTTP轮询 / TBT回放）
+   =================================================================== */
+const RealtimeAPI = {
+  _ws:         null,
+  _pollTimer:  null,
+  _replayTimer: null,
+  _replayPaused: false,
+  _stepFn:     null,
+  _msgCount:   0,
+  // 增量更新状态
+  _deltaState: { bids: new Map(), asks: new Map() },
+  // TBT事件状态
+  _tbtEvtState: { orderMap: {}, bids: {}, asks: {} },
+  // 回放状态（供seekReplay访问）
+  _replayGroups:   null,
+  _replayKeys:     null,
+  _replayIdxMap:   null,
+  _replayTotal:    0,
+  _replayIndex:    0,
+  _replaySt:       null,
+  _replayOnData:   null,
+  _replayOnStatus: null,
+  _replayOnTick:   null,
+
+  /** 连接 WebSocket（subscribeMsg：连接成功后自动发送的订阅报文） */
+  connectWS(url, format, onData, onStatus, subscribeMsg) {
+    this.disconnect();
+    this._msgCount = 0;
+    onStatus('connecting');
+    try {
+      this._ws = new WebSocket(url);
+      this._ws.onopen  = () => {
+        onStatus('connected');
+        if (subscribeMsg) this._ws.send(subscribeMsg);
+      };
+      this._ws.onclose = () => onStatus('disconnected');
+      this._ws.onerror = () => onStatus('error');
+      this._ws.onmessage = e => {
+        try {
+          const raw    = JSON.parse(e.data);
+          const parsed = this._parse(raw, format);
+          if (parsed) { this._msgCount++; onData(parsed, this._msgCount); }
+        } catch(_) {}
+      };
+    } catch(err) { onStatus('error'); }
+  },
+
+  /** 开始 HTTP 轮询 */
+  startPolling(url, intervalSec, format, onData, onStatus) {
+    this.disconnect();
+    this._msgCount = 0;
+    onStatus('polling');
+    const doPoll = async () => {
+      try {
+        const res  = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const raw    = await res.json();
+        const parsed = this._parse(raw, format);
+        if (parsed) { this._msgCount++; onData(parsed, this._msgCount); }
+        onStatus('polling');
+      } catch(_) { onStatus('error'); }
+    };
+    doPoll();
+    this._pollTimer = setInterval(doPoll, Math.max(500, intervalSec * 1000));
+  },
+
+  /**
+   * 共享行处理器（startReplay / seekReplay 共用）
+   */
+  _applyRowsToState(rows, I, st) {
+    rows.forEach(cols => {
+      const rowType = (cols[I.type] || '').trim();
+      const dir    = parseInt(cols[I.dir]);
+      const status = parseInt(cols[I.status]);
+      const price  = parseFloat(cols[I.price]);
+      const vol    = parseFloat(cols[I.vol]);
+      const oNum   = (cols[I.oNum] || '').trim();
+
+      if (rowType === 'order') {
+        if (status === 0) {
+          if (price > 0 && vol > 0) {
+            st.orderMap[oNum] = { side: dir, price, remaining: vol };
+            if (dir === 1)      st.bids[price] = (st.bids[price] || 0) + vol;
+            else if (dir === 2) st.asks[price] = (st.asks[price] || 0) + vol;
+          }
+        } else if (status === 1) {
+          const orig = st.orderMap[oNum];
+          if (orig) {
+            if (orig.side === 1) st.bids[orig.price] = Math.max(0, (st.bids[orig.price] || 0) - orig.remaining);
+            else st.asks[orig.price] = Math.max(0, (st.asks[orig.price] || 0) - orig.remaining);
+            delete st.orderMap[oNum];
+          } else if (price > 0 && vol > 0) {
+            if (dir === 1)      st.bids[price] = Math.max(0, (st.bids[price] || 0) - vol);
+            else if (dir === 2) st.asks[price] = Math.max(0, (st.asks[price] || 0) - vol);
+          }
+        }
+      } else if (rowType === 'trade') {
+        // 成交：减去已成交量（TBT数据中成交行type='trade'）
+        const txVol  = parseFloat(cols[I.txVol]);
+        const txBuy  = (cols[I.txBuy]  || '').trim();
+        const txSell = (cols[I.txSell] || '').trim();
+        const buyO  = st.orderMap[txBuy];
+        const sellO = st.orderMap[txSell];
+        if (buyO)  { const r = Math.min(buyO.remaining, txVol); buyO.remaining -= r;  st.bids[buyO.price]  = Math.max(0, (st.bids[buyO.price]  || 0) - r); if (buyO.remaining  <= 0) delete st.orderMap[txBuy];  }
+        if (sellO) { const r = Math.min(sellO.remaining,txVol); sellO.remaining -= r; st.asks[sellO.price] = Math.max(0, (st.asks[sellO.price] || 0) - r); if (sellO.remaining <= 0) delete st.orderMap[txSell]; }
+      }
+    });
+  },
+
+  /** 从st生成排序快照 */
+  _buildSnapshot(st) {
+    return {
+      bids: Object.entries(st.bids)
+        .filter(([, q]) => q > 1e-9)
+        .map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q.toFixed(2)) }))
+        .sort((a, b) => b.price - a.price),
+      asks: Object.entries(st.asks)
+        .filter(([, q]) => q > 1e-9)
+        .map(([p, q]) => ({ price: parseFloat(p), qty: parseFloat(q.toFixed(2)) }))
+        .sort((a, b) => a.price - b.price),
+    };
+  },
+
+  /**
+   * TBT文件回放
+   * @param {Map}      groups   TBTParser.buildReplayGroups 的结果
+   * @param {string[]} keys     时间戳key数组（已排序）
+   * @param {object}   idxMap   字段索引映射
+   * @param {number}   speed    倍速（0=最快）
+   * @param {Function} onData   每个时间片后回调 (rawData, msgCount)
+   * @param {Function} onStatus 状态回调 ('replay'/'replay_done'/'error')
+   * @param {Function} onTick   进度回调 (clockStr, fraction)
+   */
+  startReplay(groups, keys, idxMap, speed, onData, onStatus, onTick) {
+    this.disconnect();
+    this._replayPaused = false;
+    this._stepFn = null;
+    this._msgCount = 0;
+    // 存储状态供seekReplay使用
+    this._replayGroups   = groups;
+    this._replayKeys     = keys;
+    this._replayIdxMap   = idxMap;
+    this._replayTotal    = keys.length;
+    this._replayIndex    = 0;
+    this._replaySt       = { orderMap: {}, bids: {}, asks: {} };
+    this._replayOnData   = onData;
+    this._replayOnStatus = onStatus;
+    this._replayOnTick   = onTick;
+
+    const interval = speed === 0 ? 0 : Math.max(8, Math.round(100 / speed));
+    onStatus('replay');
+
+    const step = () => {
+      if (this._replayPaused) {
+        if (interval > 0) this._replayTimer = setTimeout(step, interval);
+        return;
+      }
+      if (this._replayIndex >= this._replayTotal) {
+        onStatus('replay_done');
+        this._stepFn = null;
+        return;
+      }
+      const key  = this._replayKeys[this._replayIndex++];
+      this._applyRowsToState(this._replayGroups.get(key), this._replayIdxMap, this._replaySt);
+
+      this._msgCount++;
+      if (onTick) onTick(TBTParser.formatClock(key), this._replayIndex / this._replayTotal);
+      onData(this._buildSnapshot(this._replaySt), this._msgCount);
+
+      this._replayTimer = setTimeout(step, interval);
+    };
+    this._stepFn = step;
+    step();
+  },
+
+  pauseReplay() { this._replayPaused = true; },
+
+  resumeReplay() {
+    if (this._replayPaused) {
+      this._replayPaused = false;
+      if (this._stepFn && !this._replayTimer) this._stepFn();
+    }
+  },
+
+  /**
+   * 跳转到指定进度（0–1），从头重建订单簿状态
+   * 支持前跳和后跳，跳转完成后自动触发一次渲染
+   */
+  seekReplay(fraction) {
+    if (!this._replayKeys || !this._replayGroups) return;
+    const targetIndex = Math.min(
+      Math.max(0, Math.floor(fraction * this._replayTotal)),
+      this._replayTotal - 1
+    );
+    // 从头重建状态到目标帧
+    const st = { orderMap: {}, bids: {}, asks: {} };
+    for (let i = 0; i < targetIndex; i++) {
+      this._applyRowsToState(this._replayGroups.get(this._replayKeys[i]), this._replayIdxMap, st);
+    }
+    this._replaySt    = st;
+    this._replayIndex = targetIndex;
+
+    // 触发一次渲染
+    const raw = this._buildSnapshot(st);
+    if (this._replayOnData)  this._replayOnData(raw, ++this._msgCount);
+    if (this._replayOnTick) {
+      const key = this._replayKeys[Math.min(targetIndex, this._replayTotal - 1)];
+      this._replayOnTick(TBTParser.formatClock(key), targetIndex / this._replayTotal);
+    }
+  },
+
+  disconnect() {
+    if (this._ws)          { try { this._ws.close(); } catch(_) {} this._ws = null; }
+    if (this._pollTimer)   { clearInterval(this._pollTimer); this._pollTimer = null; }
+    if (this._replayTimer) { clearTimeout(this._replayTimer); this._replayTimer = null; }
+    this._replayPaused = false;
+    this._stepFn       = null;
+    this._replayGroups = null;
+    this._replayKeys   = null;
+    this._replaySt     = null;
+  },
+
+  /** 根据格式解析收到的消息 */
+  _parse(raw, format) {
+    switch(format) {
+      case 'standard':
+        return DataParser.parseJSON ? raw : raw;
+      case 'binance':
+        return {
+          bids: (raw.bids || []).map(r => Array.isArray(r) ? {price:parseFloat(r[0]),qty:parseFloat(r[1])} : r),
+          asks: (raw.asks || []).map(r => Array.isArray(r) ? {price:parseFloat(r[0]),qty:parseFloat(r[1])} : r)
+        };
+      case 'okx':
+        // OKX books频道: {"data":[{"bids":[[price,qty,_,_],...], "asks":...}]}
+        if (raw.data && raw.data[0] && (raw.data[0].bids || raw.data[0].asks)) {
+          return {
+            bids: (raw.data[0].bids || []).map(r => ({ price: parseFloat(r[0]), qty: parseFloat(r[1]) })),
+            asks: (raw.data[0].asks || []).map(r => ({ price: parseFloat(r[0]), qty: parseFloat(r[1]) }))
+          };
+        }
+        return null;
+      case 'delta':
+        return this._applyDelta(raw);
+      case 'tbt_event':
+        return this._applyTBTEvent(raw);
+      default:
+        return raw;
+    }
+  },
+
+  _applyDelta(delta) {
+    const st = this._deltaState;
+    (delta.bids || []).forEach(([p, q]) => {
+      const price = parseFloat(p), qty = parseFloat(q);
+      qty === 0 ? st.bids.delete(price) : st.bids.set(price, qty);
+    });
+    (delta.asks || []).forEach(([p, q]) => {
+      const price = parseFloat(p), qty = parseFloat(q);
+      qty === 0 ? st.asks.delete(price) : st.asks.set(price, qty);
+    });
+    return {
+      bids: Array.from(st.bids.entries()).map(([price,qty])=>({price,qty})),
+      asks: Array.from(st.asks.entries()).map(([price,qty])=>({price,qty}))
+    };
+  },
+
+  _applyTBTEvent(event) {
+    const { type = 'order', price, qty, side, status = 0, orderNum } = event;
+    const st = this._tbtEvtState;
+    if (type === 'order') {
+      if (status === 0) {
+        st.orderMap[orderNum] = { side, price, remaining: qty };
+        if (side === 1) st.bids[price] = (st.bids[price] || 0) + qty;
+        else if (side === 2) st.asks[price] = (st.asks[price] || 0) + qty;
+      } else if (status === 1) {
+        const orig = st.orderMap[orderNum];
+        if (orig) {
+          if (orig.side === 1) st.bids[orig.price] = Math.max(0, (st.bids[orig.price]||0) - orig.remaining);
+          else st.asks[orig.price] = Math.max(0, (st.asks[orig.price]||0) - orig.remaining);
+          delete st.orderMap[orderNum];
+        }
+      }
+    }
+    return {
+      bids: Object.entries(st.bids).filter(([,q])=>q>0).map(([p,q])=>({price:parseFloat(p),qty:q})),
+      asks: Object.entries(st.asks).filter(([,q])=>q>0).map(([p,q])=>({price:parseFloat(p),qty:q}))
+    };
+  },
+
+  /** API格式使用说明文本 */
+  formatHints: {
+    standard: `// 标准快照格式（完整覆盖）
+{"bids":[[10.00,1000],[9.99,2000]],
+ "asks":[[10.01,800],[10.02,1500]]}`,
+    binance: `// Binance深度格式
+{"bids":[["43250.50","0.245"]],
+ "asks":[["43251.00","0.180"]]}`,
+    okx: `// OKX books频道格式（自动发送订阅报文）
+{"data":[{"bids":[["43250.5","0.245","0","1"]],
+          "asks":[["43251.0","0.180","0","2"]]}]}`,
+    delta: `// 增量更新（qty=0 表示删除该价位）
+{"bids":[[10.00,1500],[9.98,0]],
+ "asks":[[10.01,0],[10.02,900]]}`,
+    tbt_event: `// TBT单笔委托事件
+{"type":"order","price":639.33,
+ "qty":100,"side":2,
+ "status":0,"orderNum":"409"}`
+  }
+};
+
+
+/* ===================================================================
+   9. App — 主应用逻辑，连接所有模块
+   =================================================================== */
+const App = {
+  state: {
+    market:    'ashare',
+    levels:    10,
+    symbol:    '000001',
+    rawData:   null,    // {bids, asks} 未清洗
+    obData:    null,    // 清洗后标准订单簿
+    tbtLines:  null,    // TBT CSV行数组（用于重构/回放）
+    tbtGroups: null,    // TBT回放分组
+    tbtKeys:   null,
+    tbtIdxMap: null,
+    _renderThrottleTs: 0,  // 实时渲染节流时间戳
+  },
+
+  init() {
+    this._bindMarketTabs();
+    this._bindLevelsControl();
+    this._bindGenerateBtn();
+    this._bindFileInput();
+    this._bindJsonPaste();
+    this._bindManualEdit();
+    this._bindCleanOptions();
+    this._bindExport();
+    this._bindTBTPanel();
+    this._bindRealtimeAPI();
+    this._updateMarketInfo();
+    showToast('工具已就绪，请选择市场并生成或导入数据', 'info');
+  },
+
+  /** 执行完整数据处理流程 */
+  process(rawData) {
+    if (!rawData) { showToast('无有效数据', 'error'); return; }
+    this.state.rawData = rawData;
+    const cfg = MarketConfig[this.state.market];
+    const opts = this._getCleanOptions();
+    const ob   = DataCleaner.clean(rawData, cfg, opts, this.state.levels);
+    this.state.obData = ob;
+
+    OrderBookRenderer.render(ob, cfg);
+    ChartRenderer.render(ob, cfg);
+    ManualEditManager.populate(ob.bids, ob.asks, cfg);
+    setFooterStatus(`已重构 | ${cfg.name} ${this.state.symbol} | 买${ob.bids.length}档 卖${ob.asks.length}档`);
+  },
+
+  _getCleanOptions() {
+    return {
+      merge:     document.getElementById('chkMerge').checked,
+      sort:      document.getElementById('chkSort').checked,
+      filterPct: parseFloat(document.getElementById('filterThreshold').value) || 0
+    };
+  },
+
+  _bindMarketTabs() {
+    document.getElementById('marketTabs').addEventListener('click', e => {
+      const btn = e.target.closest('.tab-btn');
+      if (!btn) return;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('tab-active'));
+      btn.classList.add('tab-active');
+      this.state.market = btn.dataset.market;
+      const cfg = MarketConfig[this.state.market];
+      // 重置状态
+      this.state.symbol = cfg.defaultSymbol;
+      document.getElementById('symbolInput').value    = cfg.defaultSymbol;
+      document.getElementById('basePriceInput').value = cfg.defaultBase;
+      ChartRenderer.destroy();
+      this._updateMarketInfo();
+      // 若有数据则重新处理
+      if (this.state.rawData) this.process(this.state.rawData);
+      showToast(`已切换至 ${cfg.name}`, 'info');
+    });
+  },
+
+  _bindLevelsControl() {
+    const slider = document.getElementById('levelsSlider');
+    const numInput = document.getElementById('levelsNum');
+    const sync = val => {
+      const v = Math.min(50, Math.max(1, parseInt(val) || 1));
+      slider.value = v; numInput.value = v;
+      this.state.levels = v;
+      if (this.state.rawData) this.process(this.state.rawData);
+    };
+    slider.addEventListener('input',  e => sync(e.target.value));
+    numInput.addEventListener('change', e => sync(e.target.value));
+  },
+
+  _bindGenerateBtn() {
+    document.getElementById('btnGenerate').addEventListener('click', () => {
+      const symbol = document.getElementById('symbolInput').value.trim() || MarketConfig[this.state.market].defaultSymbol;
+      const base   = parseFloat(document.getElementById('basePriceInput').value) || MarketConfig[this.state.market].defaultBase;
+      this.state.symbol = symbol;
+      const raw = MockGenerator.generate(this.state.market, base, 50);
+      this.process(raw);
+      showToast(`✅ 已生成 ${this.state.market === 'crypto' ? '' : ''}${MarketConfig[this.state.market].name} 模拟订单簿`, 'success');
+    });
+  },
+
+  _bindFileInput() {
+    const input = document.getElementById('fileInput');
+    const label = input.closest('label');
+    // 点击导入
+    input.addEventListener('change', e => this._handleFile(e.target.files[0]));
+    // 拖拽导入
+    label.addEventListener('dragover', e => { e.preventDefault(); label.classList.add('border-blue-400'); });
+    label.addEventListener('dragleave', () => label.classList.remove('border-blue-400'));
+    label.addEventListener('drop', e => {
+      e.preventDefault(); label.classList.remove('border-blue-400');
+      this._handleFile(e.dataTransfer.files[0]);
+    });
+  },
+
+  _handleFile(file) {
+    if (!file) return;
+    const info = document.getElementById('fileInfo');
+    info.textContent = `📄 ${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+    info.classList.remove('hidden');
+    const reader = new FileReader();
+    reader.onload = e => {
+      const text = e.target.result;
+      try {
+        if (file.name.endsWith('.csv')) {
+          const firstLine = text.slice(0, 500);
+          if (TBTParser.isTBT(firstLine)) {
+            // === TBT格式处理 ===
+            this.state.tbtLines = text.split(/\r?\n/);
+            this._showTBTPanel(this.state.tbtLines);
+            showToast(`✅ 识别为TBT逐笔格式，${this.state.tbtLines.length.toLocaleString()} 行，请点击"重构订单簿"`, 'success');
+          } else {
+            // === 普通CSV ===
+            const raw = DataParser.parseCSV(text);
+            this.process(raw);
+            showToast(`✅ CSV解析成功：${file.name}`, 'success');
+          }
+        } else {
+          const parsed = DataParser.parseJSON(text);
+          if (parsed.symbol) { this.state.symbol = parsed.symbol; document.getElementById('symbolInput').value = parsed.symbol; }
+          this.process(parsed);
+          showToast(`✅ JSON解析成功：${file.name}`, 'success');
+        }
+      } catch(err) {
+        showToast(`❌ 文件解析失败：${err.message}`, 'error');
+      }
+    };
+    reader.readAsText(file, 'utf-8');
+  },
+
+  /** 显示TBT面板，填充文件信息 */
+  _showTBTPanel(lines) {
+    const panel = document.getElementById('tbtPanel');
+    panel.classList.remove('hidden');
+    document.getElementById('tbtRowCount').textContent = `${(lines.length - 1).toLocaleString()} 条`;
+    const range = TBTParser.getTimeRange(lines);
+    const symbol = lines[1] ? lines[1].split(',')[lines[0].split(',').indexOf('symbol')].replace(/^0\./, '') : '—';
+    document.getElementById('tbtFileInfo').innerHTML = `
+      <div class="flex justify-between"><span>标的</span><span class="text-amber-300 font-mono">${symbol}</span></div>
+      <div class="flex justify-between"><span>开始</span><span class="text-slate-300 font-mono">${range.first.split(' ')[1] || range.first}</span></div>
+      <div class="flex justify-between"><span>结束</span><span class="text-slate-300 font-mono">${range.last.split(' ')[1] || range.last}</span></div>
+    `;
+    // 自动切换到A股市场
+    if (this.state.market !== 'ashare') {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('tab-active'));
+      document.querySelector('[data-market="ashare"]').classList.add('tab-active');
+      this.state.market = 'ashare';
+      this._updateMarketInfo();
+    }
+  },
+
+  _bindJsonPaste() {
+    document.getElementById('btnParseJson').addEventListener('click', () => {
+      const text = document.getElementById('jsonPasteArea').value.trim();
+      if (!text) { showToast('请先粘贴JSON文本', 'error'); return; }
+      try {
+        const parsed = DataParser.parseJSON(text);
+        if (parsed.symbol) { this.state.symbol = parsed.symbol; document.getElementById('symbolInput').value = parsed.symbol; }
+        this.process(parsed);
+        showToast('✅ JSON解析成功', 'success');
+      } catch(err) {
+        showToast(`❌ JSON解析失败：${err.message}`, 'error');
+      }
+    });
+  },
+
+  _bindManualEdit() {
+    document.getElementById('btnAddBid').addEventListener('click', () => {
+      const cfg = MarketConfig[this.state.market];
+      const container = document.getElementById('manualEditTable');
+      if (container.querySelector('.text-slate-500')) container.innerHTML = '';
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-1';
+      row.dataset.side = 'bid';
+      row.innerHTML = `
+        <span class="w-6 text-xs text-green-400 font-medium">B</span>
+        <input type="number" value="${cfg.defaultBase}" step="${cfg.tickSize}" class="flex-1 bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono text-right price-input" />
+        <input type="number" value="${cfg.lotSize}" min="0" class="flex-1 bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono text-right qty-input" />
+        <button class="text-slate-500 hover:text-red-400 text-xs px-1 del-btn" title="删除">✕</button>
+      `;
+      row.querySelector('.del-btn').addEventListener('click', () => row.remove());
+      container.appendChild(row);
+    });
+
+    document.getElementById('btnAddAsk').addEventListener('click', () => {
+      const cfg = MarketConfig[this.state.market];
+      const container = document.getElementById('manualEditTable');
+      if (container.querySelector('.text-slate-500')) container.innerHTML = '';
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-1';
+      row.dataset.side = 'ask';
+      row.innerHTML = `
+        <span class="w-6 text-xs text-red-400 font-medium">A</span>
+        <input type="number" value="${cfg.defaultBase + cfg.tickSize}" step="${cfg.tickSize}" class="flex-1 bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono text-right price-input" />
+        <input type="number" value="${cfg.lotSize}" min="0" class="flex-1 bg-slate-700 border border-slate-600 rounded px-1 py-0.5 text-xs font-mono text-right qty-input" />
+        <button class="text-slate-500 hover:text-red-400 text-xs px-1 del-btn" title="删除">✕</button>
+      `;
+      row.querySelector('.del-btn').addEventListener('click', () => row.remove());
+      container.appendChild(row);
+    });
+
+    document.getElementById('btnApplyEdit').addEventListener('click', () => {
+      const raw = ManualEditManager.collect();
+      if (!raw.bids.length && !raw.asks.length) { showToast('编辑表格中无有效数据', 'error'); return; }
+      this.process(raw);
+      showToast('✅ 已应用手动编辑并重构', 'success');
+    });
+  },
+
+  _bindCleanOptions() {
+    document.getElementById('btnReprocess').addEventListener('click', () => {
+      if (!this.state.rawData) { showToast('请先导入或生成数据', 'error'); return; }
+      this.process(this.state.rawData);
+      showToast('🔄 已按新参数重新清洗', 'info');
+    });
+  },
+
+  _bindExport() {
+    document.getElementById('btnExportJSON').addEventListener('click', () => {
+      if (!this.state.obData) return;
+      Exporter.exportJSON(this.state.obData, MarketConfig[this.state.market], this.state.symbol);
+      showToast('✅ JSON已导出', 'success');
+    });
+    document.getElementById('btnExportCSV').addEventListener('click', () => {
+      if (!this.state.obData) return;
+      Exporter.exportCSV(this.state.obData, MarketConfig[this.state.market], this.state.symbol);
+      showToast('✅ CSV已导出', 'success');
+    });
+  },
+
+  /* ---- TBT面板绑定 ---- */
+  _bindTBTPanel() {
+    // 重构按钮
+    document.getElementById('btnTbtReconstruct').addEventListener('click', async () => {
+      if (!this.state.tbtLines) { showToast('请先导入TBT文件', 'error'); return; }
+      const snapTime = document.getElementById('tbtSnapshotTime').value.trim() || null;
+      const progress = document.getElementById('tbtProgress');
+      const bar      = document.getElementById('tbtProgressBar');
+      const pct      = document.getElementById('tbtProgressPct');
+
+      progress.classList.remove('hidden');
+      document.getElementById('btnTbtReconstruct').disabled = true;
+      setFooterStatus('TBT解析中…');
+
+      try {
+        const result = await TBTParser.reconstruct(
+          this.state.tbtLines,
+          snapTime,
+          frac => { bar.style.width = `${(frac * 100).toFixed(0)}%`; pct.textContent = `${(frac * 100).toFixed(0)}%`; }
+        );
+        if (result.symbol) {
+          this.state.symbol = result.symbol;
+          document.getElementById('symbolInput').value = result.symbol;
+        }
+        this.process(result);
+        const s = result.stats;
+        showToast(`✅ 重构完成 | 新增${s.totalOrders} 撤${s.totalCancels} 成交${s.totalTrans} | ${result.bids.length}买档 ${result.asks.length}卖档`, 'success');
+        setFooterStatus(`TBT重构 | ${result.symbol} | ${result.lastTs.split(' ')[1] || result.lastTs}`);
+      } catch(err) {
+        showToast(`❌ TBT重构失败：${err.message}`, 'error');
+      } finally {
+        progress.classList.add('hidden');
+        document.getElementById('btnTbtReconstruct').disabled = false;
+      }
+    });
+
+    // 回放按钮（开始 / 暂停 / 继续）
+    document.getElementById('btnTbtReplay').addEventListener('click', async () => {
+      if (!this.state.tbtLines) { showToast('请先导入TBT文件', 'error'); return; }
+      const controls = document.getElementById('tbtReplayControls');
+
+      // 正在回放中 → 切换暂停/继续
+      if (!controls.classList.contains('hidden')) {
+        if (!RealtimeAPI._replayPaused) {
+          RealtimeAPI.pauseReplay();
+          document.getElementById('btnTbtReplay').textContent = '▶ 继续';
+          document.getElementById('btnTbtReplayPause').textContent = '▶ 继续';
+        } else {
+          RealtimeAPI.resumeReplay();
+          document.getElementById('btnTbtReplay').textContent = '⏸ 暂停';
+          document.getElementById('btnTbtReplayPause').textContent = '⏸ 暂停';
+        }
+        return;
+      }
+
+      // 首次启动回放：先预处理分组（有缓存则跳过）
+      if (!this.state.tbtGroups) {
+        const progress = document.getElementById('tbtProgress');
+        const bar      = document.getElementById('tbtProgressBar');
+        const pct      = document.getElementById('tbtProgressPct');
+        progress.classList.remove('hidden');
+        document.getElementById('btnTbtReplay').disabled = true;
+        setFooterStatus('TBT预处理分组中…');
+        try {
+          const g = await TBTParser.buildReplayGroups(
+            this.state.tbtLines,
+            frac => { bar.style.width = `${(frac*100).toFixed(0)}%`; pct.textContent = `${(frac*100).toFixed(0)}%`; }
+          );
+          this.state.tbtGroups = g.groups;
+          this.state.tbtKeys   = g.keys;
+          this.state.tbtIdxMap = g.idxMap;
+        } finally {
+          progress.classList.add('hidden');
+          document.getElementById('btnTbtReplay').disabled = false;
+        }
+      }
+
+      controls.classList.remove('hidden');
+      document.getElementById('btnTbtReplay').textContent = '⏸ 暂停';
+
+      const speed = parseFloat(document.getElementById('tbtReplaySpeed').value) || 5;
+      // 节流渲染：最多每100ms渲染一次，但确保最新快照总能展示
+      let _pendingRaw = null;
+      let _throttleTimer = null;
+      const _doRender = (raw, count) => {
+        document.getElementById('apiMsgCount').textContent = `已接收 ${count} 条`;
+        document.getElementById('apiMsgCount').classList.remove('hidden');
+        this.process(raw);
+      };
+      const _onData = (raw, count) => {
+        _pendingRaw = { raw, count };
+        const now = Date.now();
+        if (now - this.state._renderThrottleTs >= 100) {
+          clearTimeout(_throttleTimer);
+          this.state._renderThrottleTs = now;
+          _doRender(raw, count);
+        } else if (!_throttleTimer) {
+          _throttleTimer = setTimeout(() => {
+            _throttleTimer = null;
+            this.state._renderThrottleTs = Date.now();
+            if (_pendingRaw) _doRender(_pendingRaw.raw, _pendingRaw.count);
+          }, 100 - (now - this.state._renderThrottleTs));
+        }
+      };
+      RealtimeAPI.startReplay(
+        this.state.tbtGroups,
+        this.state.tbtKeys,
+        this.state.tbtIdxMap,
+        speed,
+        _onData,
+        status => {
+          if (status === 'replay_done') {
+            controls.classList.add('hidden');
+            document.getElementById('btnTbtReplay').textContent = '▶ 回放';
+            showToast('✅ TBT回放完毕', 'success');
+            this.state.tbtGroups = null; // 清理缓存
+          }
+        },
+        (clockStr, frac) => {
+          const seekBar = document.getElementById('tbtSeekBar');
+          if (!seekBar._isDragging) seekBar.value = Math.round(frac * 10000);
+          document.getElementById('tbtReplayTime').textContent = clockStr;
+          // 显示当前交易时段
+          const session = TradingSessions.getSessionFromStr(this.state.market, clockStr);
+          const lbl = document.getElementById('tbtSessionLabel');
+          if (session) {
+            lbl.textContent  = session.name;
+            lbl.style.color  = session.color;
+            lbl.style.background = session.color + '22';
+          } else {
+            lbl.textContent = ''; lbl.style.background = '';
+          }
+        }
+      );
+    });
+
+    // 暂停按钮（与主回放按钮同步）
+    document.getElementById('btnTbtReplayPause').addEventListener('click', () => {
+      if (RealtimeAPI._replayPaused) {
+        RealtimeAPI.resumeReplay();
+        document.getElementById('btnTbtReplayPause').textContent = '⏸ 暂停';
+        document.getElementById('btnTbtReplay').textContent = '⏸ 暂停';
+      } else {
+        RealtimeAPI.pauseReplay();
+        document.getElementById('btnTbtReplayPause').textContent = '▶ 继续';
+        document.getElementById('btnTbtReplay').textContent = '▶ 继续';
+      }
+    });
+
+    // 停止按钮
+    document.getElementById('btnTbtReplayStop').addEventListener('click', () => {
+      RealtimeAPI.disconnect();
+      this.state.tbtGroups = null;
+      document.getElementById('tbtReplayControls').classList.add('hidden');
+      document.getElementById('tbtSeekBar').value = '0';
+      document.getElementById('tbtReplayTime').textContent = '—';
+      document.getElementById('tbtSessionLabel').textContent = '';
+      document.getElementById('btnTbtReplay').textContent = '▶ 回放';
+      showToast('⏹ 回放已停止', 'info');
+    });
+
+    // 拖拽进度条：seek功能
+    const seekBar = document.getElementById('tbtSeekBar');
+    seekBar._isDragging = false;
+
+    // 鼠标/触摸按下：暂停回放，进入拖拽模式
+    seekBar.addEventListener('mousedown',  () => {
+      seekBar._isDragging = true;
+      if (!RealtimeAPI._replayPaused) {
+        RealtimeAPI.pauseReplay();
+        document.getElementById('btnTbtReplayPause').textContent = '▶ 继续';
+        document.getElementById('btnTbtReplay').textContent = '▶ 继续';
+      }
+    });
+    seekBar.addEventListener('touchstart', () => { seekBar._isDragging = true; }, { passive: true });
+
+    // 拖拽中：实时显示目标时间（不重建状态，仅展示）
+    seekBar.addEventListener('input', () => {
+      if (!this.state.tbtKeys) return;
+      const frac = seekBar.value / 10000;
+      const idx  = Math.min(Math.floor(frac * this.state.tbtKeys.length), this.state.tbtKeys.length - 1);
+      document.getElementById('tbtReplayTime').textContent = TBTParser.formatClock(this.state.tbtKeys[idx]);
+    });
+
+    // 释放：跳转到目标位置，重建状态，恢复回放
+    const doSeek = () => {
+      seekBar._isDragging = false;
+      if (!this.state.tbtKeys) return;
+      const frac = seekBar.value / 10000;
+      showToast('⏩ 跳转中…', 'info');
+      // 使用 setTimeout 让toast先渲染
+      setTimeout(() => {
+        RealtimeAPI.seekReplay(frac);
+        showToast('✅ 已跳转', 'success');
+        RealtimeAPI.resumeReplay();
+        document.getElementById('btnTbtReplayPause').textContent = '⏸ 暂停';
+        document.getElementById('btnTbtReplay').textContent = '⏸ 暂停';
+      }, 20);
+    };
+    seekBar.addEventListener('mouseup',  doSeek);
+    seekBar.addEventListener('touchend', doSeek, { passive: true });
+  },
+
+  /* ---- 实时API面板绑定 ---- */
+  _bindRealtimeAPI() {
+    const modeEl    = document.getElementById('apiMode');
+    const urlGroup  = document.getElementById('apiUrlGroup');
+    const intGroup  = document.getElementById('apiIntervalGroup');
+    const fmtGroup  = document.getElementById('apiFormatGroup');
+    const hintEl    = document.getElementById('apiFormatHint');
+    const countEl   = document.getElementById('apiMsgCount');
+    const urlInput  = document.getElementById('apiUrl');
+
+    // 按当前市场刷新预设列表
+    const refreshPresets = () => {
+      const presets = MarketAPIPresets[this.state.market] || [];
+      const group   = document.getElementById('apiPresetsGroup');
+      const sel     = document.getElementById('apiPreset');
+      const noteEl  = document.getElementById('apiPresetNote');
+      group.classList.toggle('hidden', presets.length === 0);
+      sel.innerHTML = '<option value="">— 选择预设 —</option>' +
+        presets.map((p, i) => `<option value="${i}">${p.label}</option>`).join('');
+      noteEl.classList.add('hidden');
+    };
+    refreshPresets();
+
+    // 选择预设时自动填充URL/格式/说明
+    document.getElementById('apiPreset').addEventListener('change', e => {
+      const presets = MarketAPIPresets[this.state.market] || [];
+      const p = presets[parseInt(e.target.value)];
+      if (!p) return;
+      urlInput.value = p.url;
+      document.getElementById('apiFormat').value = p.format;
+      const noteEl = document.getElementById('apiPresetNote');
+      if (p.note) { noteEl.textContent = '📌 ' + p.note; noteEl.classList.remove('hidden'); }
+      else noteEl.classList.add('hidden');
+      const hint = RealtimeAPI.formatHints[p.format];
+      if (hint) { hintEl.textContent = hint; hintEl.classList.remove('hidden'); }
+      else hintEl.classList.add('hidden');
+    });
+
+    // 模式切换：显示/隐藏相关控件
+    modeEl.addEventListener('change', () => {
+      const mode = modeEl.value;
+      urlGroup.classList.toggle('hidden', mode === 'replay');
+      intGroup.classList.toggle('hidden', mode !== 'poll');
+      fmtGroup.classList.toggle('hidden', mode === 'replay');
+      document.getElementById('apiPresetsGroup').classList.toggle('hidden', mode === 'replay');
+      if (mode === 'ws')     urlInput.value = 'ws://localhost:8080/orderbook';
+      if (mode === 'poll')   urlInput.value = 'http://localhost:8080/orderbook';
+      if (mode === 'replay') showToast('回放模式：请先在TBT面板加载文件并点击"▶ 回放"', 'info');
+    });
+
+    // 市场切换时同步刷新预设（由App._bindMarketTabs 调用）
+    this._refreshAPIPresets = refreshPresets;
+
+    // 格式切换：显示格式说明
+    document.getElementById('apiFormat').addEventListener('change', e => {
+      const hint = RealtimeAPI.formatHints[e.target.value];
+      if (hint) { hintEl.textContent = hint; hintEl.classList.remove('hidden'); }
+      else hintEl.classList.add('hidden');
+    });
+
+    const setStatus = (status, count) => {
+      const dot  = document.getElementById('apiStatusDot');
+      const text = document.getElementById('apiStatusText');
+      const badge = document.getElementById('wsStatusBadge');
+      badge.classList.remove('hidden');
+      badge.style.display = 'flex';
+
+      const map = {
+        connecting:   { dot:'bg-yellow-400 dot-blink', text:'连接中…', color:'text-yellow-400' },
+        connected:    { dot:'bg-green-400',             text:'已连接',  color:'text-green-400' },
+        polling:      { dot:'bg-blue-400 dot-blink',    text:'轮询中',  color:'text-blue-400' },
+        replay:       { dot:'bg-amber-400 dot-blink',   text:'回放中',  color:'text-amber-400' },
+        replay_done:  { dot:'bg-slate-400',             text:'回放完毕',color:'text-slate-400' },
+        disconnected: { dot:'bg-slate-500',             text:'已断开',  color:'text-slate-400' },
+        error:        { dot:'bg-red-400',               text:'连接错误',color:'text-red-400' },
+      };
+      const s = map[status] || map.disconnected;
+      dot.className  = `w-2 h-2 rounded-full ${s.dot}`;
+      text.className = `text-xs ${s.color}`;
+      text.textContent = s.text;
+      document.getElementById('wsStatusDot').className  = `w-2 h-2 rounded-full ${s.dot}`;
+      document.getElementById('wsStatusText').className = `text-xs ${s.color}`;
+      document.getElementById('wsStatusText').textContent = s.text;
+
+      if (count !== undefined && count > 0) {
+        countEl.textContent = `已接收 ${count} 条`;
+        countEl.classList.remove('hidden');
+      }
+
+      // 连接/断开按钮状态
+      const isActive = ['connecting','connected','polling','replay'].includes(status);
+      document.getElementById('btnApiConnect').disabled    = isActive;
+      document.getElementById('btnApiDisconnect').disabled = !isActive;
+    };
+
+    const onData = (raw, count) => {
+      const now = Date.now();
+      if (now - this.state._renderThrottleTs < 100) return;
+      this.state._renderThrottleTs = now;
+      document.getElementById('apiMsgCount').textContent = `已接收 ${count} 条`;
+      document.getElementById('apiMsgCount').classList.remove('hidden');
+      this.process(raw);
+    };
+
+    // 连接按钮
+    document.getElementById('btnApiConnect').addEventListener('click', () => {
+      const mode   = modeEl.value;
+      const url    = document.getElementById('apiUrl').value.trim();
+      const format = document.getElementById('apiFormat').value;
+
+      if (mode === 'replay') {
+        if (!this.state.tbtLines) { showToast('请先在"文件导入"处载入TBT文件', 'error'); return; }
+        document.getElementById('btnTbtReplay').click();
+        setStatus('replay', 0);
+        return;
+      }
+      if (!url) { showToast('请输入接口地址', 'error'); return; }
+
+      // 获取选中预设的订阅报文（OKX等需要）
+      const presets = MarketAPIPresets[this.state.market] || [];
+      const presetIdx = parseInt(document.getElementById('apiPreset').value);
+      const subscribeMsg = (!isNaN(presetIdx) && presets[presetIdx]) ? (presets[presetIdx].subscribe || null) : null;
+
+      if (mode === 'ws') {
+        RealtimeAPI.connectWS(url, format, onData, setStatus, subscribeMsg);
+      } else if (mode === 'poll') {
+        const interval = parseFloat(document.getElementById('apiInterval').value) || 1;
+        RealtimeAPI.startPolling(url, interval, format, onData, setStatus);
+      }
+    });
+
+    // 断开按钮
+    document.getElementById('btnApiDisconnect').addEventListener('click', () => {
+      RealtimeAPI.disconnect();
+      setStatus('disconnected');
+      showToast('已断开连接', 'info');
+    });
+  },
+
+  _updateMarketInfo() {
+    const cfg = MarketConfig[this.state.market];
+    const sessHtml = TradingSessions.getScheduleHtml(this.state.market);
+    document.getElementById('marketInfoPanel').innerHTML = `
+      <div class="flex justify-between"><span class="text-slate-500">市场</span><span>${cfg.name}</span></div>
+      <div class="flex justify-between"><span class="text-slate-500">货币</span><span>${cfg.currency}</span></div>
+      <div class="flex justify-between"><span class="text-slate-500">Tick</span><span>${cfg.tickSize}</span></div>
+      <div class="flex justify-between"><span class="text-slate-500">价格精度</span><span>${cfg.priceDecimals}位</span></div>
+      <div class="flex justify-between"><span class="text-slate-500">最小交易量</span><span>${cfg.lotSize}</span></div>
+      ${cfg.limitPct ? `<div class="flex justify-between"><span class="text-slate-500">涨跌停</span><span>±${cfg.limitPct}%</span></div>` : ''}
+      ${sessHtml ? `<div class="border-t border-slate-700 mt-1 pt-1 space-y-0.5 text-xs">${sessHtml}</div>` : ''}
+    `;
+    document.getElementById('formatExample').textContent = cfg.formatExample;
+    // 刷新实时API预设
+    if (this._refreshAPIPresets) this._refreshAPIPresets();
+  }
+};
+
+
+/* ===================================================================
+   工具函数
+   =================================================================== */
+function showToast(msg, type = 'info') {
+  const colors = { success: 'bg-green-800 border-green-600', error: 'bg-red-900 border-red-600', info: 'bg-slate-700 border-slate-500' };
+  const el = document.createElement('div');
+  el.className = `toast px-3 py-2 rounded border text-xs shadow-lg pointer-events-auto ${colors[type] || colors.info}`;
+  el.textContent = msg;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+function setFooterStatus(msg) {
+  document.getElementById('footerStatus').textContent = msg;
+}
+
+
+/* ===================================================================
+   启动应用
+   =================================================================== */
+document.addEventListener('DOMContentLoaded', () => App.init());
+</script>
+
+</body>
+</html>
