@@ -1,8 +1,8 @@
 # 📊 多市场订单簿重构工具
 
-> 纯前端单文件工具 · 双击即用 · 零安装 · 零后端
+> Python Web 服务版 · 双击 `start.bat` 即用 · 支持实时行情接入
 
-一款基于纯 HTML5 + 原生 JavaScript 构建的金融量化工具，支持 A股、美股、港股、期货、加密货币全品类订单簿数据的本地化重构、可视化与回放分析。
+一款面向金融量化研究的订单簿重构与分析工具，支持 A股、美股、港股、期货、加密货币全品类数据。前端为纯 HTML5 + 原生 JavaScript，后端为 FastAPI Python 服务，提供实时行情 WebSocket 推送。
 
 ---
 
@@ -10,28 +10,43 @@
 
 | 功能 | 说明 |
 |------|------|
-| 🗂️ TBT 逐笔数据解析 | 兼容深交所 Level2 TBT CSV 格式，支持 order/trade/cancel 全事件类型 |
-| 📈 订单簿重构 | 精确维护买卖盘 Map，正确处理新增/撤单/成交，生成任意时刻快照 |
-| 🎞️ 回放 + 进度条 | 按时间戳分帧回放，支持拖拽进度条跳转任意位置，前跳/后跳均可 |
-| 🕐 交易时段感知 | 自动识别 A股集合竞价 / 连续竞价 / 收盘竞价等时段，彩色标签实时显示 |
-| 📡 实时 API 接入 | WebSocket / HTTP 轮询双模式，内置 Binance / OKX 交易所预设，一键填充 |
+| 🗂️ TBT 逐笔数据解析 | 兼容深交所 Level2 TBT CSV 格式，支持 order/trade 全事件类型 |
+| 📈 订单簿重构 | 精确维护买卖盘 Map，正确处理新增/撤单/成交，生成任意时刻盘口快照 |
+| 🎞️ 回放 + 进度条 | 按时间戳分帧回放，支持拖拽跳转任意位置，前跳/后跳均可，倍速可调 |
+| 📊 时序CSV导出 | 重构完成后自动生成全交易时段时序数据，每帧一行（宽表格式），一键导出 |
+| 🕐 交易时段感知 | 自动识别各市场交易时段（A股集合竞价、连续竞价等），彩色标签实时标注 |
+| 📡 实时行情接入 | WebSocket / HTTP轮询 + Python本地服务三种模式，内置主流交易所预设 |
+| 🐍 Python 行情服务 | FastAPI 后端，ccxt.pro 接入 150+ 加密货币交易所，支持单交易所与多交易所聚合 |
 | 🧹 数据清洗 | 合并同价档位、异常价过滤、crossed-book 保护、涨跌停上下限识别 |
 | 📉 盘口深度图 | Chart.js 渲染买卖盘累计深度曲线（阶梯图），实时同步更新 |
-| 💾 导入 / 导出 | 支持 JSON / CSV 导入导出，所有计算在浏览器本地完成，数据不上传 |
+| 💾 多格式导出 | JSON快照 / CSV快照 / 时序CSV，所有数据在本地处理，不上传 |
 | ✏️ 手动编辑 | 可直接在表格中修改价格/数量，实时重算统计指标 |
 
 ---
 
 ## 🚀 快速开始
 
-**无需安装，无需服务器。**
+### 方式一：Python Web 服务（推荐，支持实时行情）
+
+**环境要求：Python 3.9+**
+
+```bash
+# Windows
+双击 start.bat
+
+# Linux / macOS
+chmod +x start.sh && ./start.sh
+```
+
+`start.bat` 会自动安装依赖并启动服务，浏览器自动打开 `http://localhost:8765`。
+
+### 方式二：纯静态（无实时行情）
 
 ```
-下载 orderbook-tool.html
-双击用浏览器打开
+直接双击 orderbook-tool.html 用浏览器打开
 ```
 
-推荐浏览器：Chrome / Edge（最新版）
+TBT解析、订单簿重构、文件导入导出、回放等功能在纯静态模式下均可用。实时Python行情服务不可用。
 
 ---
 
@@ -39,17 +54,27 @@
 
 ```
 .
-├── orderbook-tool.html      # 完整工具（单文件，即开即用）
-└── TBT_300308_20251231.csv  # 示例数据（深交所 300308 逐笔委托，可选）
+├── orderbook-tool.html      # 前端页面（含全部UI逻辑，纯静态可独立运行）
+├── server.py                # FastAPI 后端（提供HTTP页面 + WebSocket行情推送）
+├── start.bat                # Windows 一键启动脚本
+├── start.sh                 # Linux/macOS 启动脚本
+├── requirements.txt         # Python 依赖
+└── adapters/
+    ├── base.py              # 适配器抽象基类
+    ├── crypto.py            # 加密货币（ccxt.pro，单所/多所聚合）
+    ├── ashare.py            # A股（xtquant/QMT Level2）
+    ├── us.py                # 美股（Alpaca / Interactive Brokers）
+    ├── hk.py                # 港股（富途 OpenAPI）
+    └── futures.py           # 期货（openctp/CTP MdApi）
 ```
 
 ---
 
 ## 📋 支持的数据格式
 
-### 1. TBT 逐笔委托 CSV（A股 Level2）
+### TBT 逐笔委托 CSV（A股 Level2）
 
-深交所标准逐笔格式，字段示例：
+深交所标准逐笔格式：
 
 ```
 type,clock,clock_int,symbol,entrust_volume,entrust_dir,entrust_orderType,
@@ -57,45 +82,22 @@ entrust_orderStatus,entrust_price,entrust_orderNum,...,
 transaction_volume,transaction_buyNum,transaction_sellNum,...
 ```
 
-- `type`：`order`（委托）/ `trade`（成交）
-- `entrust_dir`：`1` = 买，`2` = 卖
-- `entrust_orderStatus`：`0` = 新增，`1` = 撤销
-- `clock_int`：9位整数，格式 `HHMMSSMMM`
+| 字段 | 说明 |
+|------|------|
+| `type` | `order`（委托）/ `trade`（成交） |
+| `entrust_dir` | `1` = 买，`2` = 卖 |
+| `entrust_orderStatus` | `0` = 新增，`1` = 撤销 |
+| `clock_int` | 9位整数，格式 `HHMMSSMMM` |
 
-### 2. 标准 JSON 快照
-
-```json
-{
-  "bids": [[10.00, 1000], [9.99, 2000]],
-  "asks": [[10.01, 800], [10.02, 1500]]
-}
-```
-
-### 3. Binance 深度格式
+### 标准 JSON 快照
 
 ```json
-{
-  "bids": [["43250.50", "0.245"]],
-  "asks": [["43251.00", "0.180"]]
-}
+{ "bids": [[10.00, 1000], [9.99, 2000]], "asks": [[10.01, 800]] }
 ```
 
-### 4. OKX Books 频道格式
+### Binance / OKX WebSocket 格式
 
-```json
-{
-  "data": [{"bids": [["43250.5", "0.245", "0", "1"]], "asks": [...]}]
-}
-```
-
-### 5. 增量更新（Delta）
-
-```json
-{
-  "bids": [[10.00, 1500], [9.98, 0]],
-  "asks": [[10.01, 0], [10.02, 900]]
-}
-```
+直接粘贴或通过预设一键填充接口地址，工具自动适配各格式。
 
 ---
 
@@ -113,17 +115,67 @@ transaction_volume,transaction_buyNum,transaction_sellNum,...
 
 ## 📡 实时数据接入
 
-### 加密货币（浏览器直连）
+### 模式一：浏览器直连 WebSocket
 
-| 交易所 | 说明 |
-|--------|------|
-| Binance 现货 | `wss://stream.binance.com:9443/ws/btcusdt@depth20@100ms` |
-| Binance 合约 | `wss://fstream.binance.com/ws/btcusdt@depth20@100ms` |
-| OKX 现货 | `wss://ws.okx.com:8443/ws/v5/public`，自动发送订阅报文 |
+内置预设，在"实时数据接口"面板选择预设后一键填充：
 
-### A股 / 期货 / 美股 / 港股
+| 交易所 | 品种示例 |
+|--------|---------|
+| Binance 现货 | BTC/USDT、ETH/USDT、BNB/USDT（20档） |
+| Binance U本位合约 | BTC、ETH |
+| OKX 现货 | BTC-USDT、ETH-USDT（5档/400档） |
+| Bybit 现货 | BTC/USDT、ETH/USDT |
 
-需在本地部署行情转发服务（CTP / QMT / Alpaca / Futu），将数据转为标准 JSON 格式后通过 HTTP 或 WebSocket 推送至工具。
+> **注意：** 海外 IP 可直连上述接口。国内 IP 访问 Binance 需代理。
+
+### 模式二：Python 本地服务（推荐用于量化研究）
+
+启动 `start.bat` 后，在页面"实时数据接口"面板选择 **🐍 本地Python服务**：
+
+**加密货币（无需账号，公开行情）：**
+- 支持 10 个主流交易所：Binance、OKX、Bybit、Coinbase、Kraken、Gate、KuCoin、MEXC、HTX、Bitget
+- **单交易所模式**：订阅指定交易所的实时订单簿
+- **多所聚合模式**：同时订阅多个交易所，按价位合并为聚合订单簿
+
+**传统市场（需对应券商账号/SDK）：**
+
+| 市场 | 依赖 | 说明 |
+|------|------|------|
+| A股 Level2 | xtquant（迅投QMT）| 需安装 QMT 客户端 |
+| 美股 | alpaca-py 或 ib_insync | Alpaca 免费账号可用；IBKR 需本地运行 TWS |
+| 港股 | futu-api | 需本地运行 FutuOpenD |
+| 期货 | openctp-ctp | 支持仿真环境测试 |
+
+安装可选依赖：
+
+```bash
+# A股
+pip install xtquant          # 需先安装 QMT 客户端
+
+# 美股
+pip install alpaca-py        # 或 ib_insync
+
+# 港股
+pip install futu-api
+
+# 期货
+pip install openctp-ctp
+```
+
+---
+
+## 📊 时序CSV 导出格式
+
+导入 TBT 文件点击"重构"后，工具自动遍历全部时间戳生成时序数据。点击"↓ 时序CSV"导出：
+
+```
+timestamp,bid1_p,bid1_q,bid2_p,bid2_q,...,ask1_p,ask1_q,ask2_p,ask2_q,...
+09:15:00.000,10.05,5000,10.04,3200,...,10.06,2800,10.07,1500,...
+09:15:00.100,10.05,4800,10.04,3200,...,10.06,3100,10.07,1500,...
+...
+```
+
+每行代表一个时刻的完整盘口快照，适合后续量化回测使用。
 
 ---
 
@@ -131,47 +183,63 @@ transaction_volume,transaction_buyNum,transaction_sellNum,...
 
 | 层 | 技术 |
 |----|------|
-| 结构 | HTML5 |
-| 逻辑 | 原生 JavaScript（无任何框架依赖） |
-| 样式 | Tailwind CSS（CDN） |
+| 前端结构 | HTML5 |
+| 前端逻辑 | 原生 JavaScript（无框架） |
+| 前端样式 | Tailwind CSS（CDN） |
 | 图表 | Chart.js 4.x（CDN） |
-
-全部通过 CDN 引入，本地**零安装**，断网环境下需手动替换为本地资源。
+| 后端服务 | Python 3.9+ / FastAPI / uvicorn |
+| 实时行情 | ccxt.pro（WebSocket，支持 150+ 交易所） |
 
 ---
 
 ## ⚙️ 核心模块说明
 
+### 前端（orderbook-tool.html）
+
 ```
 MarketConfig      — 五市场配置（Tick大小、价格精度、涨跌停比例等）
 TradingSessions   — 各市场交易时段定义与当前时段识别
-MarketAPIPresets  — 交易所 API 预设（Binance / OKX 等）
-TBTParser         — TBT CSV 解析、订单簿重构、回放分组
+TBTParser         — TBT CSV 解析、订单簿重构引擎、时序快照生成、回放分组
 DataCleaner       — 清洗、crossed-book保护、档位过滤、统计计算
-OrderBookRenderer — 买卖盘表格渲染（背景条可视化）
+OrderBookRenderer — 买卖盘表格渲染（数量背景条可视化）
 ChartRenderer     — Chart.js 深度图渲染
-RealtimeAPI       — WebSocket / HTTP轮询 / TBT回放 / Seek跳转
+RealtimeAPI       — WebSocket / HTTP轮询 / Python服务 / TBT回放 / Seek跳转
+Exporter          — JSON快照 / CSV快照 / 时序CSV 三种导出格式
 App               — 主控制器，绑定所有 UI 事件
+```
+
+### 后端（server.py + adapters/）
+
+```
+server.py         — FastAPI 应用，GET / 提供页面，WS /ws 推送行情，GET /api/status 状态
+adapters/base.py  — BaseAdapter 抽象类（connect/disconnect/_run_loop/_emit）
+adapters/crypto   — ccxt.pro 单交易所 + 多交易所聚合
+adapters/ashare   — QMT/xtquant A股 Level2
+adapters/us       — Alpaca / Interactive Brokers 美股
+adapters/hk       — 富途 OpenAPI 港股
+adapters/futures  — openctp/CTP 期货
 ```
 
 ---
 
-## 📸 界面预览
+## 📸 界面说明
 
-- 左侧：市场选择 Tab、模拟数据生成、文件导入、JSON 粘贴、手动编辑
-- 中部：买卖盘深度图（Chart.js 阶梯曲线）
-- 右侧：订单簿表格（买盘/卖盘，含数量背景条）
-- 下方：TBT 回放控制台（进度条拖拽 + 时段标签 + 倍速调节）
-- 底部：统计信息（价差、价差bps、买卖盘总量、多空比）
+- **左侧面板**：市场 Tab 切换、模拟数据生成、本地文件导入（JSON/TBT CSV）、JSON 粘贴、手动编辑
+- **中部**：Chart.js 买卖盘累计深度阶梯曲线
+- **右侧**：订单簿双边表格（含数量背景条、统计区域）
+- **导出栏**：↓ JSON / ↓ CSV快照 / ↓ 时序CSV
+- **TBT 面板**：重构按钮 + 进度条 + 回放控制台（进度拖拽 / 倍速 / 时段标签）
+- **实时API面板**：WebSocket / HTTP轮询 / 🐍 Python服务，内置交易所预设
 
 ---
 
 ## 📝 开发说明
 
-- 单文件架构，所有代码内联，便于分发与离线使用
-- 数据处理全部在浏览器内存中完成，**不产生任何网络请求**（除 CDN 加载和用户主动配置的 API）
-- TBT 大文件（>30MB）采用分批异步处理，每批 8000 行 yield 一次，避免 UI 冻结
-- 回放引擎采用 `setTimeout` 调度，支持暂停/继续/跳转，帧率可配
+- TBT 大文件采用分批异步处理（每批 8000 行 yield），避免 UI 冻结
+- 时序生成每 500 帧 yield 一次，全量遍历不阻塞页面
+- 回放引擎基于 `setTimeout` 调度，支持暂停/继续/Seek跳转
+- 适配器导入采用 `try/except`，缺失可选依赖不影响其他市场功能
+- WebSocket 标准快照格式：`{market, symbol, bids:[[p,q],...], asks:[[p,q],...], ts}`
 
 ---
 
