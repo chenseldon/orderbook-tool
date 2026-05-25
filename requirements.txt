@@ -2,11 +2,12 @@
 
 # ── 服务器核心（必装）────────────────────────
 fastapi>=0.110.0
-"uvicorn[standard]>=0.29.0"
+uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9     # 文件上传支持
+aiofiles>=23.0.0            # 异步文件读写
 
 # ── 加密货币（必装，公开行情无需API Key）──────
-"ccxt[pro]>=4.3.0"           # 支持150+交易所，含WebSocket Pro版
+ccxt[pro]>=4.3.0             # 支持150+交易所，含WebSocket Pro版
 
 # ── A股（需安装迅投QMT客户端后才能用）─────────
 # xtquant                    # 安装QMT客户端后在QMT目录下的site-packages找到
@@ -22,3 +23,4 @@ python-multipart>=0.0.9     # 文件上传支持
 
 # ── 期货 CTP ──────────────────────────────────
 # openctp-ctp                # pip install openctp-ctp（仿真可测试）
+

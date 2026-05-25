@@ -3,8 +3,8 @@ chcp 65001 >nul
 title 多市场订单簿重构工具
 
 echo ====================================
-echo  多市场订单簿重构工具 v2.0
-echo  Python Web 服务版
+echo  多市场订单簿重构工具 v3.0
+echo  Python-First Web 服务版
 echo ====================================
 echo.
 
@@ -26,7 +26,7 @@ if errorlevel 1 (
 
 echo [2/2] 启动服务...
 echo.
-echo  服务地址: http://localhost:8765
+echo  服务地址: http://localhost:5000
 echo  浏览器将自动打开
 echo.
 echo  按 Ctrl+C 停止服务
